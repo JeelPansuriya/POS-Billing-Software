@@ -65,12 +65,6 @@ export default function LoginPage() {
         >
           {loading ? 'Signing in…' : 'Sign In'}
         </button>
-
-        <p className="text-xs text-gray-400 text-center mt-6">
-          Default users: <b>manager</b> / manager123 &nbsp;·&nbsp; <b>owner</b> / owner123
-          <br />
-          Change them in Settings after first login.
-        </p>
       </form>
     </div>
   );

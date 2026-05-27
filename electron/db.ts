@@ -53,6 +53,29 @@ export function initDb() {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      at TEXT NOT NULL DEFAULT (datetime('now')),
+      actor_user_id TEXT,
+      actor_username TEXT,
+      action TEXT NOT NULL,
+      entity_type TEXT,
+      entity_id TEXT,
+      details TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at DESC);
+
+    CREATE TABLE IF NOT EXISTS cash_count (
+      day TEXT PRIMARY KEY,
+      counted_cash INTEGER NOT NULL,
+      system_cash INTEGER NOT NULL,
+      variance INTEGER NOT NULL,
+      note TEXT,
+      recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
+      recorded_by_user_id TEXT,
+      recorded_by_username TEXT
+    );
   `);
 
   // Migration: add void columns if missing on an older bills table.
@@ -148,10 +171,51 @@ export function localISODate(d: Date = new Date()): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// Token numbering resets to 1 at local midnight: the count is scoped to today's
+// local-tz date, so the first bill after 00:00 IST gets token #1 again.
 export function nextTokenNo(): number {
   const today = localISODate();
   const row = db
     .prepare("SELECT COUNT(*) as c FROM bills WHERE date(created_at, 'localtime') = ?")
     .get(today) as { c: number };
   return row.c + 1;
+}
+
+export type AuditAction =
+  | 'login'
+  | 'login_failed'
+  | 'logout'
+  | 'password_change'
+  | 'price_change'
+  | 'setting_change'
+  | 'void'
+  | 'restore'
+  | 'integrity_check'
+  | 'cash_count'
+  | 'printer_test';
+
+export function writeAudit(entry: {
+  actorUserId?: string | null;
+  actorUsername?: string | null;
+  action: AuditAction;
+  entityType?: string | null;
+  entityId?: string | null;
+  details?: unknown;
+}) {
+  try {
+    db.prepare(
+      `INSERT INTO audit_log (id, actor_user_id, actor_username, action, entity_type, entity_id, details)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      entry.actorUserId ?? null,
+      entry.actorUsername ?? null,
+      entry.action,
+      entry.entityType ?? null,
+      entry.entityId ?? null,
+      entry.details === undefined ? null : JSON.stringify(entry.details)
+    );
+  } catch (err) {
+    console.error('writeAudit failed:', err);
+  }
 }

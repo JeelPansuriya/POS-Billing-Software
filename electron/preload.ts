@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 const api = {
+  session: {
+    set: (user: { id: string; username: string } | null) =>
+      ipcRenderer.invoke('session:set', user),
+    clear: () => ipcRenderer.invoke('session:clear'),
+  },
   auth: {
     login: (username: string, password: string) =>
       ipcRenderer.invoke('auth:login', username, password),
@@ -29,6 +34,10 @@ const api = {
   analytics: {
     summary: (range: { from: string; to: string }) =>
       ipcRenderer.invoke('analytics:summary', range),
+    hourly: (range: { from: string; to: string }) =>
+      ipcRenderer.invoke('analytics:hourly', range) as Promise<
+        Array<{ hour: number; bills: number; plates: number; revenue: number }>
+      >,
   },
   stats: {
     today: () =>
@@ -51,6 +60,73 @@ const api = {
   },
   printer: {
     reprint: (billId: string) => ipcRenderer.invoke('printer:reprint', billId),
+    test: () =>
+      ipcRenderer.invoke('printer:test') as Promise<{ ok: boolean; error?: string }>,
+  },
+  audit: {
+    list: (filter?: { limit?: number; action?: string }) =>
+      ipcRenderer.invoke('audit:list', filter ?? {}) as Promise<
+        Array<{
+          id: string;
+          at: string;
+          actor_user_id: string | null;
+          actor_username: string | null;
+          action: string;
+          entity_type: string | null;
+          entity_id: string | null;
+          details: string | null;
+        }>
+      >,
+  },
+  cash: {
+    get: (dayIso?: string) =>
+      ipcRenderer.invoke('cash:get', dayIso) as Promise<{
+        day: string;
+        systemCash: number;
+        counted: {
+          countedCash: number;
+          variance: number;
+          note: string | null;
+          recordedAt: string;
+          recordedBy: string | null;
+        } | null;
+      }>,
+    set: (payload: { day?: string; countedCash: number; note?: string }) =>
+      ipcRenderer.invoke('cash:set', payload) as Promise<{
+        ok: boolean;
+        day: string;
+        systemCash: number;
+        variance: number;
+      }>,
+  },
+  db: {
+    integrityCheck: () =>
+      ipcRenderer.invoke('db:integrityCheck') as Promise<{
+        ok: boolean;
+        messages: string[];
+      }>,
+  },
+  restore: {
+    fromCsv: (payload: { filePath?: string; commit?: boolean }) =>
+      ipcRenderer.invoke('restore:fromCsv', payload) as Promise<
+        | { ok: false; error?: string; canceled?: boolean }
+        | { ok: true; preview: true; parsed: number; toInsert: number; skipped: number }
+        | { ok: true; preview: false; inserted: number; skipped: number }
+      >,
+  },
+  exportLocal: {
+    run: (dayIso?: string) =>
+      ipcRenderer.invoke('export:run', dayIso) as Promise<{
+        ok: boolean;
+        path?: string;
+        rows: number;
+        error?: string;
+      }>,
+    openFolder: () =>
+      ipcRenderer.invoke('export:openFolder') as Promise<{ ok: boolean; path: string }>,
+    getDir: () => ipcRenderer.invoke('export:getDir') as Promise<string>,
+    pickDir: () =>
+      ipcRenderer.invoke('export:pickDir') as Promise<{ ok: boolean; path?: string }>,
   },
   day: {
     summary: (dayIso?: string) =>

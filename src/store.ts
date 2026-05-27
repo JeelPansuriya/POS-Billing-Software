@@ -18,7 +18,20 @@ function defaultMeal(): MealType {
 export const useApp = create<AppState>((set) => ({
   user: null,
   mealType: defaultMeal(),
-  setUser: (user) => set({ user }),
+  setUser: (user) => {
+    // Mirror the renderer's auth state into the main process so audit_log
+    // entries can attribute actions to the logged-in user. Fire-and-forget:
+    // a failed IPC call mustn't block the UI from advancing past login.
+    if (user) {
+      window.api.session.set({ id: user.id, username: user.username }).catch(() => {});
+    } else {
+      window.api.session.clear().catch(() => {});
+    }
+    set({ user });
+  },
   setMealType: (mealType) => set({ mealType }),
-  logout: () => set({ user: null }),
+  logout: () => {
+    window.api.session.clear().catch(() => {});
+    set({ user: null });
+  },
 }));

@@ -13,11 +13,13 @@ export default function BillingPage() {
   const [prices, setPrices] = useState<{ lunch: number; dinner: number }>({ lunch: 0, dinner: 0 });
   const [busy, setBusy] = useState(false);
   const [lastBill, setLastBill] = useState<{
+    id: string;
     tokenNo: number;
     plates: number;
     total: number;
     mealType: string;
     paymentMode: string;
+    printError?: string;
   } | null>(null);
   const [recent, setRecent] = useState<any[]>([]);
   const [stats, setStats] = useState<{
@@ -61,17 +63,23 @@ export default function BillingPage() {
       const res = await window.api.bills.create({ plates, mealType, paymentMode });
       if (res.ok && res.bill) {
         setLastBill({
+          id: res.bill.id,
           tokenNo: res.bill.tokenNo,
           plates: res.bill.plates,
           total: res.bill.total,
           mealType: res.bill.mealType,
           paymentMode: res.bill.paymentMode,
+          printError: res.printError,
         });
         setPlates(1);
         setPaymentMode('cash');
         refreshRecent();
         refreshStats();
-        setTimeout(() => setLastBill(null), 4000);
+        // Print failures stay on-screen until dismissed; successful prints
+        // auto-clear so the next sale isn't crowded by stale confirmations.
+        if (!res.printError) {
+          setTimeout(() => setLastBill(null), 4000);
+        }
       } else {
         alert(res.error ?? 'Failed to create bill');
       }
@@ -79,6 +87,66 @@ export default function BillingPage() {
       setBusy(false);
     }
   };
+
+  const reprintLast = async () => {
+    if (!lastBill) return;
+    const r = await window.api.printer.reprint(lastBill.id);
+    if (r && (r as any).ok === false) {
+      alert(`Reprint failed: ${(r as any).error ?? 'unknown error'}`);
+      return;
+    }
+    setLastBill({ ...lastBill, printError: undefined });
+    setTimeout(() => setLastBill(null), 4000);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Skip when a modal is open — those have their own focused controls.
+      if (showSummary || voidTarget) return;
+      // Skip when typing into a field (defensive — billing page has none today,
+      // but future inputs shouldn't break).
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable) return;
+      }
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+
+      // Digits 1–8 set plate count directly.
+      if (/^[1-8]$/.test(e.key)) {
+        setPlates(Number(e.key));
+        e.preventDefault();
+        return;
+      }
+      switch (e.key) {
+        case '+':
+        case '=':
+          setPlates((p) => p + 1);
+          e.preventDefault();
+          break;
+        case '-':
+          setPlates((p) => Math.max(1, p - 1));
+          e.preventDefault();
+          break;
+        case 'c':
+        case 'C':
+          setPaymentMode('cash');
+          e.preventDefault();
+          break;
+        case 'u':
+        case 'U':
+          setPaymentMode('upi');
+          e.preventDefault();
+          break;
+        case 'Enter':
+          submit();
+          e.preventDefault();
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showSummary, voidTarget, busy, plates, mealType, paymentMode, pricePerPlate]);
 
   return (
     <div className="h-full flex">
@@ -88,7 +156,9 @@ export default function BillingPage() {
           <h2 className="text-xl font-bold text-gray-800">Select Plates</h2>
           <div className="flex items-center gap-3">
             <div className="text-sm text-gray-500 hidden xl:block">
-              Tap a number to set plate count, or use +/−
+              Tap a number, or press <kbd className="px-1.5 py-0.5 rounded border bg-white text-xs font-mono">1</kbd>–<kbd className="px-1.5 py-0.5 rounded border bg-white text-xs font-mono">8</kbd> ·{' '}
+              <kbd className="px-1.5 py-0.5 rounded border bg-white text-xs font-mono">C</kbd>/<kbd className="px-1.5 py-0.5 rounded border bg-white text-xs font-mono">U</kbd> ·{' '}
+              <kbd className="px-1.5 py-0.5 rounded border bg-white text-xs font-mono">Enter</kbd>
             </div>
             <button
               onClick={() => setShowSummary(true)}
@@ -297,10 +367,33 @@ export default function BillingPage() {
           {busy ? 'Printing…' : 'Print Token & Save'}
         </button>
 
-        {lastBill && (
+        {lastBill && !lastBill.printError && (
           <div className="mt-3 p-3 rounded-lg bg-green-50 border border-green-300 text-green-800 text-sm text-center">
             ✓ Token #{lastBill.tokenNo} printed — {lastBill.plates} plates, ₹{lastBill.total} (
             {lastBill.paymentMode})
+          </div>
+        )}
+
+        {lastBill && lastBill.printError && (
+          <div className="mt-3 p-3 rounded-lg bg-red-50 border border-red-300 text-red-800 text-sm">
+            <div className="font-semibold">
+              ⚠ Token #{lastBill.tokenNo} saved, but print FAILED
+            </div>
+            <div className="text-xs text-red-700 mt-1 break-words">{lastBill.printError}</div>
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={reprintLast}
+                className="px-3 py-1.5 rounded bg-red-600 text-white text-xs font-semibold hover:bg-red-700"
+              >
+                Reprint
+              </button>
+              <button
+                onClick={() => setLastBill(null)}
+                className="px-3 py-1.5 rounded border border-red-300 text-red-700 text-xs font-semibold hover:bg-red-100"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
       </div>

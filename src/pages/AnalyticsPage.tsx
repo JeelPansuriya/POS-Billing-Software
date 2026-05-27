@@ -5,6 +5,8 @@ import {
   CartesianGrid,
   Cell,
   Legend,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -40,18 +42,49 @@ function rangeToDates(r: Range): { from: string; to: string; label: string } {
   }
 }
 
+// Returns the immediately preceding period of the same length, useful for
+// delta-vs-previous-period comparisons. "All" has no meaningful previous period.
+function previousPeriod(r: Range): { from: string; to: string } | null {
+  if (r === 'all') return null;
+  const cur = rangeToDates(r);
+  const curFrom = new Date(cur.from);
+  const curTo = new Date(cur.to);
+  const span = curTo.getTime() - curFrom.getTime();
+  const prevTo = new Date(curFrom);
+  const prevFrom = new Date(curFrom.getTime() - span);
+  return { from: prevFrom.toISOString(), to: prevTo.toISOString() };
+}
+
 export default function AnalyticsPage() {
   const [range, setRange] = useState<Range>('today');
   const [data, setData] = useState<any>(null);
+  const [prev, setPrev] = useState<{ bills: number; plates: number; revenue: number } | null>(
+    null
+  );
+  const [hourly, setHourly] = useState<
+    Array<{ hour: number; bills: number; plates: number; revenue: number }>
+  >([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       try {
-        const { from, to } = rangeToDates(range);
-        const res = await window.api.analytics.summary({ from, to });
+        const cur = rangeToDates(range);
+        const [res, hours] = await Promise.all([
+          window.api.analytics.summary({ from: cur.from, to: cur.to }),
+          window.api.analytics.hourly({ from: cur.from, to: cur.to }),
+        ]);
         setData(res);
+        setHourly(hours);
+
+        const prevRange = previousPeriod(range);
+        if (prevRange) {
+          const prevRes = await window.api.analytics.summary(prevRange);
+          setPrev(prevRes.total);
+        } else {
+          setPrev(null);
+        }
       } finally {
         setLoading(false);
       }
@@ -81,6 +114,24 @@ export default function AnalyticsPage() {
       })),
     [byPayment]
   );
+
+  const hourlyChart = useMemo(
+    () =>
+      hourly.map((h) => ({
+        hour: `${h.hour.toString().padStart(2, '0')}:00`,
+        plates: h.plates,
+        revenue: h.revenue,
+        bills: h.bills,
+      })),
+    [hourly]
+  );
+
+  const peakHour = useMemo(() => {
+    if (hourly.length === 0) return null;
+    let best = hourly[0];
+    for (const h of hourly) if (h.plates > best.plates) best = h;
+    return best.plates > 0 ? best : null;
+  }, [hourly]);
 
   const MEAL_COLORS = ['#facc15', '#6366f1'];
   const PAY_COLORS = ['#22c55e', '#3b82f6'];
@@ -114,11 +165,26 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* KPI cards */}
+      {/* KPI cards with previous-period delta */}
       <div className="grid grid-cols-3 gap-4 mb-6">
-        <Kpi label="Revenue" value={`₹${total.revenue.toLocaleString()}`} accent="brand" />
-        <Kpi label="Bills" value={total.bills.toString()} accent="blue" />
-        <Kpi label="Plates Sold" value={total.plates.toString()} accent="green" />
+        <Kpi
+          label="Revenue"
+          value={`₹${total.revenue.toLocaleString()}`}
+          accent="brand"
+          delta={deltaPct(total.revenue, prev?.revenue)}
+        />
+        <Kpi
+          label="Bills"
+          value={total.bills.toString()}
+          accent="blue"
+          delta={deltaPct(total.bills, prev?.bills)}
+        />
+        <Kpi
+          label="Plates Sold"
+          value={total.plates.toString()}
+          accent="green"
+          delta={deltaPct(total.plates, prev?.plates)}
+        />
       </div>
 
       {/* Charts row */}
@@ -160,6 +226,49 @@ export default function AnalyticsPage() {
         </Card>
       </div>
 
+      {/* Hour-of-day */}
+      <div className="mb-6">
+        <Card
+          title={
+            peakHour
+              ? `Plates by Hour — peak at ${peakHour.hour
+                  .toString()
+                  .padStart(2, '0')}:00 (${peakHour.plates} plates)`
+              : 'Plates by Hour'
+          }
+        >
+          {hourlyChart.every((h) => h.plates === 0) ? (
+            <Empty />
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={hourlyChart}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="hour" tick={{ fontSize: 11 }} interval={1} />
+                <YAxis tick={{ fontSize: 12 }} />
+                <Tooltip />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="plates"
+                  stroke="#ea580c"
+                  strokeWidth={2}
+                  dot={false}
+                  name="Plates"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="bills"
+                  stroke="#3b82f6"
+                  strokeWidth={2}
+                  dot={false}
+                  name="Bills"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+      </div>
+
       {/* Daily revenue */}
       <Card title="Daily Revenue">
         {daily.length === 0 ? (
@@ -184,18 +293,37 @@ export default function AnalyticsPage() {
   );
 }
 
-function Kpi({ label, value, accent }: { label: string; value: string; accent: string }) {
+function deltaPct(current: number, previous: number | undefined): number | null {
+  if (previous === undefined) return null;
+  if (previous === 0) return current > 0 ? 100 : null;
+  return ((current - previous) / previous) * 100;
+}
+
+function Kpi({
+  label,
+  value,
+  accent,
+  delta,
+}: {
+  label: string;
+  value: string;
+  accent: string;
+  delta: number | null;
+}) {
   const colors: Record<string, string> = {
     brand: 'from-orange-500 to-orange-600',
     blue: 'from-blue-500 to-blue-600',
     green: 'from-green-500 to-green-600',
   };
   return (
-    <div
-      className={`p-5 rounded-2xl bg-gradient-to-br ${colors[accent]} text-white shadow-md`}
-    >
+    <div className={`p-5 rounded-2xl bg-gradient-to-br ${colors[accent]} text-white shadow-md`}>
       <div className="text-sm opacity-90">{label}</div>
       <div className="text-3xl font-bold mt-1">{value}</div>
+      {delta !== null && (
+        <div className="text-xs mt-1 opacity-90">
+          {delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(1)}% vs previous period
+        </div>
+      )}
     </div>
   );
 }

@@ -13,6 +13,10 @@ export default function SettingsPage() {
   const [newPwd, setNewPwd] = useState('');
   const [msg, setMsg] = useState('');
   const [syncStatus, setSyncStatus] = useState('');
+  const [exportDir, setExportDir] = useState('');
+  const [lastExportAt, setLastExportAt] = useState<string | null>(null);
+  const [lastExportPath, setLastExportPath] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState('');
 
   const load = async () => {
     const p = await window.api.prices.get();
@@ -24,6 +28,9 @@ export default function SettingsPage() {
     setBackupSchedule(
       (await window.api.settings.get('backup_schedule')) ?? '15:00,20:00,23:00'
     );
+    setExportDir(await window.api.exportLocal.getDir());
+    setLastExportAt(await window.api.settings.get('last_local_export_at'));
+    setLastExportPath(await window.api.settings.get('last_local_export_path'));
   };
 
   useEffect(() => {
@@ -64,6 +71,31 @@ export default function SettingsPage() {
     if (res.ok) setSyncStatus(`Synced ${res.synced} bill(s).`);
     else setSyncStatus(`Sync failed: ${res.reason}`);
     setTimeout(() => setSyncStatus(''), 4000);
+  };
+
+  const pickExportDir = async () => {
+    const res = await window.api.exportLocal.pickDir();
+    if (res.ok && res.path) {
+      setExportDir(res.path);
+      flash('Backup folder updated.');
+    }
+  };
+
+  const exportNow = async () => {
+    setExportStatus('Exporting…');
+    const res = await window.api.exportLocal.run();
+    if (res.ok) {
+      setExportStatus(`Exported ${res.rows} bill(s) → ${res.path}`);
+      setLastExportAt(new Date().toISOString());
+      setLastExportPath(res.path ?? null);
+    } else {
+      setExportStatus(`Export failed: ${res.error}`);
+    }
+    setTimeout(() => setExportStatus(''), 5000);
+  };
+
+  const openExportFolder = async () => {
+    await window.api.exportLocal.openFolder();
   };
 
   return (
@@ -156,6 +188,50 @@ export default function SettingsPage() {
             Run the SQL in <code>supabase/schema.sql</code> in your Supabase project, then paste
             the URL and anon key here. After saving, restart the app.
           </p>
+        </Section>
+
+        <Section title="Daily Local Backup (CSV)">
+          <Field label="Backup Folder">
+            <div className="flex items-center gap-2">
+              <input
+                value={exportDir}
+                readOnly
+                className="input flex-1 bg-gray-50 text-xs"
+                title={exportDir}
+              />
+              <button
+                onClick={pickExportDir}
+                className="px-3 py-2 rounded-lg bg-gray-200 hover:bg-gray-300 text-sm font-medium whitespace-nowrap"
+              >
+                Change…
+              </button>
+            </div>
+          </Field>
+          <p className="text-xs text-gray-500 mt-1">
+            A CSV of each day's bills is written here automatically once per day. Point this at a
+            Dropbox / OneDrive folder for off-site safety.
+          </p>
+          <div className="flex items-center gap-2 mt-3">
+            <button
+              onClick={exportNow}
+              className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium"
+            >
+              Export Today Now
+            </button>
+            <button
+              onClick={openExportFolder}
+              className="px-4 py-2 rounded-lg bg-gray-200 hover:bg-gray-300 text-sm font-medium"
+            >
+              Open Folder
+            </button>
+          </div>
+          {exportStatus && <p className="text-sm text-gray-700 mt-2 break-all">{exportStatus}</p>}
+          {lastExportAt && (
+            <p className="text-xs text-gray-500 mt-2 break-all">
+              Last export: {new Date(lastExportAt).toLocaleString()}
+              {lastExportPath ? ` — ${lastExportPath}` : ''}
+            </p>
+          )}
         </Section>
 
         <Section title={`Change Password (${user.username})`}>

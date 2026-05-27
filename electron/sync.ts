@@ -1,4 +1,10 @@
 import { getDb } from './db';
+import { BUILT_IN_SUPABASE_URL, BUILT_IN_SUPABASE_ANON_KEY } from './config';
+
+function isPlaceholder(v: string | null | undefined): boolean {
+  if (!v) return true;
+  return v.includes('YOUR-PROJECT-REF') || v.includes('PASTE_YOUR_ANON');
+}
 
 let syncing = false;
 
@@ -30,8 +36,12 @@ export async function syncPendingBills(): Promise<{
   if (syncing) return { ok: true, synced: 0, failed: 0, reason: 'already-running' };
   syncing = true;
   try {
-    const rawUrl = process.env.SUPABASE_URL || getSetting('supabase_url');
-    const key = process.env.SUPABASE_ANON_KEY || getSetting('supabase_anon_key');
+    const builtInUrl = isPlaceholder(BUILT_IN_SUPABASE_URL) ? null : BUILT_IN_SUPABASE_URL;
+    const builtInKey = isPlaceholder(BUILT_IN_SUPABASE_ANON_KEY)
+      ? null
+      : BUILT_IN_SUPABASE_ANON_KEY;
+    const rawUrl = process.env.SUPABASE_URL || getSetting('supabase_url') || builtInUrl;
+    const key = process.env.SUPABASE_ANON_KEY || getSetting('supabase_anon_key') || builtInKey;
     if (!rawUrl || !key) {
       return { ok: false, synced: 0, failed: 0, reason: 'supabase-not-configured' };
     }

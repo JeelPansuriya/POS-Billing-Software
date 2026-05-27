@@ -132,6 +132,108 @@ export async function printToken(bill: Bill) {
   await PosPrinter.print(data, options);
 }
 
+// Sample slip used to verify printer wiring without burning a real token. The
+// shape mirrors `printToken` so any driver-side issues (margins, page-end
+// behaviour, paper width) surface here too.
+export async function printTest() {
+  const printerName =
+    (getDb().prepare("SELECT value FROM settings WHERE key='printer_name'").get() as
+      | { value: string }
+      | undefined)?.value ?? '';
+  const restaurantName =
+    (getDb().prepare("SELECT value FROM settings WHERE key='restaurant_name'").get() as
+      | { value: string }
+      | undefined)?.value ?? 'Restaurant';
+  const now = new Date();
+  const stamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  })}`;
+
+  const data: PosPrintData[] = [
+    {
+      type: 'text',
+      value: `${restaurantName}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        fontWeight: 'bold',
+        textAlign: 'center',
+        fontSize: '16px',
+        lineHeight: '1.1',
+      },
+    },
+    {
+      type: 'text',
+      value: `PRINTER TEST${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        fontWeight: 'bold',
+        textAlign: 'center',
+        fontSize: '14px',
+        lineHeight: '1.2',
+      },
+    },
+    {
+      type: 'text',
+      value: `${stamp}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'center',
+        fontSize: '11px',
+        lineHeight: '1.2',
+        marginBottom: '4px',
+      },
+    },
+    {
+      type: 'text',
+      value: `THALI x 1${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        fontWeight: 'bold',
+        textAlign: 'center',
+        fontSize: '40px',
+        marginTop: '2px',
+        marginBottom: '2px',
+        lineHeight: '1',
+      },
+    },
+    {
+      type: 'text',
+      value: `If you can read this, the printer is OK.${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'center',
+        fontSize: '11px',
+        lineHeight: '1.2',
+      },
+    },
+    {
+      type: 'text',
+      value: '.',
+      style: {
+        ...fullWidth,
+        color: 'white',
+        fontSize: '30px',
+        lineHeight: '30px',
+        height: '30px',
+      },
+    },
+  ];
+
+  const options: PosPrintOptions = {
+    preview: false,
+    margin: '0 0 30px 0',
+    copies: 1,
+    printerName: printerName || undefined,
+    timeOutPerLine: 400,
+    pageSize: '80mm',
+    silent: true,
+  };
+
+  await PosPrinter.print(data, options);
+}
+
 // ----- Day summary (Z-report) ------------------------------------------------
 
 export type DaySummary = {
