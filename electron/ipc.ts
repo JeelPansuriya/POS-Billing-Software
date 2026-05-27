@@ -1,9 +1,15 @@
 import type { IpcMain } from 'electron';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
-import { getDb, nextTokenNo } from './db';
-import { printToken } from './printer';
+import { getDb, localISODate, nextTokenNo } from './db';
+import { printToken, printDaySummary } from './printer';
 import { syncPendingBills } from './sync';
+
+type DayCloseResult = {
+  printed: boolean;
+  printError?: string;
+  sync: { ok: boolean; synced: number; failed: number; reason?: string };
+};
 
 export function registerIpcHandlers(ipcMain: IpcMain) {
   // ---- AUTH ----
@@ -119,6 +125,31 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     }
   );
 
+  // ---- VOID ----
+  ipcMain.handle('bills:void', async (_e, billId: string, reason: string) => {
+    const row = getDb()
+      .prepare('SELECT id, voided_at FROM bills WHERE id = ?')
+      .get(billId) as { id: string; voided_at: string | null } | undefined;
+    if (!row) return { ok: false, error: 'Bill not found' };
+    if (row.voided_at) return { ok: false, error: 'Already voided' };
+
+    getDb()
+      .prepare(
+        `UPDATE bills
+            SET voided_at = datetime('now'),
+                void_reason = ?,
+                sync_status = 'pending'
+          WHERE id = ?`
+      )
+      .run(reason ?? '', billId);
+
+    // Best-effort cloud push so the void propagates. Failure is non-fatal —
+    // next scheduled sync will retry.
+    syncPendingBills().catch((e) => console.error('Sync after void failed:', e));
+
+    return { ok: true };
+  });
+
   ipcMain.handle(
     'bills:list',
     (
@@ -147,19 +178,24 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
 
   // ---- TODAY'S RUNNING STATS ----
   ipcMain.handle('stats:today', () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localISODate();
 
     const totals = getDb()
       .prepare(
         `SELECT COUNT(*) as bills, COALESCE(SUM(plates), 0) as plates, COALESCE(SUM(total), 0) as revenue
-         FROM bills WHERE date(created_at) = ?`
+         FROM bills
+          WHERE date(created_at, 'localtime') = ?
+            AND voided_at IS NULL`
       )
       .get(today) as { bills: number; plates: number; revenue: number };
 
     const byPay = getDb()
       .prepare(
         `SELECT payment_mode, COALESCE(SUM(total), 0) as revenue
-         FROM bills WHERE date(created_at) = ? GROUP BY payment_mode`
+           FROM bills
+          WHERE date(created_at, 'localtime') = ?
+            AND voided_at IS NULL
+          GROUP BY payment_mode`
       )
       .all(today) as Array<{ payment_mode: 'cash' | 'upi'; revenue: number }>;
 
@@ -184,31 +220,41 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
           COUNT(*) as bills,
           COALESCE(SUM(plates), 0) as plates,
           COALESCE(SUM(total), 0) as revenue
-         FROM bills WHERE created_at >= ? AND created_at < ?`
+         FROM bills
+         WHERE created_at >= ? AND created_at < ?
+           AND voided_at IS NULL`
       )
       .get(range.from, range.to) as { bills: number; plates: number; revenue: number };
 
     const byMeal = getDb()
       .prepare(
         `SELECT meal_type, COUNT(*) as bills, COALESCE(SUM(plates), 0) as plates, COALESCE(SUM(total), 0) as revenue
-         FROM bills WHERE created_at >= ? AND created_at < ? GROUP BY meal_type`
+         FROM bills
+         WHERE created_at >= ? AND created_at < ?
+           AND voided_at IS NULL
+         GROUP BY meal_type`
       )
       .all(range.from, range.to);
 
     const byPayment = getDb()
       .prepare(
         `SELECT payment_mode, COUNT(*) as bills, COALESCE(SUM(total), 0) as revenue
-         FROM bills WHERE created_at >= ? AND created_at < ? GROUP BY payment_mode`
+         FROM bills
+         WHERE created_at >= ? AND created_at < ?
+           AND voided_at IS NULL
+         GROUP BY payment_mode`
       )
       .all(range.from, range.to);
 
     const daily = getDb()
       .prepare(
-        `SELECT date(created_at) as day,
+        `SELECT date(created_at, 'localtime') as day,
                 COALESCE(SUM(plates), 0) as plates,
                 COALESCE(SUM(total), 0) as revenue
-         FROM bills WHERE created_at >= ? AND created_at < ?
-         GROUP BY date(created_at) ORDER BY day`
+         FROM bills
+         WHERE created_at >= ? AND created_at < ?
+           AND voided_at IS NULL
+         GROUP BY date(created_at, 'localtime') ORDER BY day`
       )
       .all(range.from, range.to);
 
@@ -241,6 +287,136 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       .prepare("SELECT COUNT(*) as c FROM bills WHERE sync_status != 'synced'")
       .get() as { c: number };
     return row.c;
+  });
+
+  // ---- DAY SUMMARY (Z-report) ----
+  ipcMain.handle('day:summary', (_e, dayIso?: string) => {
+    // dayIso is the ISO date prefix YYYY-MM-DD (local) — defaults to today.
+    const day = dayIso ?? localISODate();
+
+    const totals = getDb()
+      .prepare(
+        `SELECT COUNT(*) as bills, COALESCE(SUM(plates), 0) as plates, COALESCE(SUM(total), 0) as revenue,
+                MIN(token_no) as first_token, MAX(token_no) as last_token
+         FROM bills WHERE date(created_at) = ?`
+      )
+      .get(day) as {
+      bills: number;
+      plates: number;
+      revenue: number;
+      first_token: number | null;
+      last_token: number | null;
+    };
+
+    const meals = getDb()
+      .prepare(
+        `SELECT meal_type, COALESCE(SUM(plates),0) as plates, COALESCE(SUM(total),0) as revenue
+         FROM bills WHERE date(created_at) = ? GROUP BY meal_type`
+      )
+      .all(day) as Array<{ meal_type: 'lunch' | 'dinner'; plates: number; revenue: number }>;
+
+    const pays = getDb()
+      .prepare(
+        `SELECT payment_mode, COALESCE(SUM(total),0) as revenue
+         FROM bills WHERE date(created_at) = ? GROUP BY payment_mode`
+      )
+      .all(day) as Array<{ payment_mode: 'cash' | 'upi'; revenue: number }>;
+
+    const summary = {
+      day,
+      totalBills: totals.bills,
+      totalPlates: totals.plates,
+      totalRevenue: totals.revenue,
+      firstToken: totals.first_token,
+      lastToken: totals.last_token,
+      lunchPlates: meals.find((m) => m.meal_type === 'lunch')?.plates ?? 0,
+      lunchRevenue: meals.find((m) => m.meal_type === 'lunch')?.revenue ?? 0,
+      dinnerPlates: meals.find((m) => m.meal_type === 'dinner')?.plates ?? 0,
+      dinnerRevenue: meals.find((m) => m.meal_type === 'dinner')?.revenue ?? 0,
+      cashRevenue: pays.find((p) => p.payment_mode === 'cash')?.revenue ?? 0,
+      upiRevenue: pays.find((p) => p.payment_mode === 'upi')?.revenue ?? 0,
+    };
+    return summary;
+  });
+
+  ipcMain.handle('day:print', async (_e, dayIso?: string) => {
+    const day = dayIso ?? localISODate();
+
+    const totals = getDb()
+      .prepare(
+        `SELECT COUNT(*) as bills, COALESCE(SUM(plates), 0) as plates, COALESCE(SUM(total), 0) as revenue,
+                MIN(token_no) as first_token, MAX(token_no) as last_token
+           FROM bills
+          WHERE date(created_at, 'localtime') = ?
+            AND voided_at IS NULL`
+      )
+      .get(day) as {
+      bills: number;
+      plates: number;
+      revenue: number;
+      first_token: number | null;
+      last_token: number | null;
+    };
+    const meals = getDb()
+      .prepare(
+        `SELECT meal_type, COALESCE(SUM(plates),0) as plates, COALESCE(SUM(total),0) as revenue
+           FROM bills
+          WHERE date(created_at, 'localtime') = ?
+            AND voided_at IS NULL
+          GROUP BY meal_type`
+      )
+      .all(day) as Array<{ meal_type: 'lunch' | 'dinner'; plates: number; revenue: number }>;
+    const pays = getDb()
+      .prepare(
+        `SELECT payment_mode, COALESCE(SUM(total),0) as revenue
+           FROM bills
+          WHERE date(created_at, 'localtime') = ?
+            AND voided_at IS NULL
+          GROUP BY payment_mode`
+      )
+      .all(day) as Array<{ payment_mode: 'cash' | 'upi'; revenue: number }>;
+
+    const restaurantName =
+      (getDb().prepare("SELECT value FROM settings WHERE key='restaurant_name'").get() as
+        | { value: string }
+        | undefined)?.value ?? 'Restaurant';
+
+    // Format date as DD/MM/YYYY for the Indian audience
+    const [yyyy, mm, dd] = day.split('-');
+    const dayLabel = `${dd}/${mm}/${yyyy}`;
+
+    const result: DayCloseResult = {
+      printed: false,
+      sync: { ok: false, synced: 0, failed: 0 },
+    };
+
+    try {
+      await printDaySummary({
+        restaurantName,
+        dayLabel,
+        totalBills: totals.bills,
+        totalPlates: totals.plates,
+        totalRevenue: totals.revenue,
+        firstToken: totals.first_token,
+        lastToken: totals.last_token,
+        lunchPlates: meals.find((m) => m.meal_type === 'lunch')?.plates ?? 0,
+        lunchRevenue: meals.find((m) => m.meal_type === 'lunch')?.revenue ?? 0,
+        dinnerPlates: meals.find((m) => m.meal_type === 'dinner')?.plates ?? 0,
+        dinnerRevenue: meals.find((m) => m.meal_type === 'dinner')?.revenue ?? 0,
+        cashRevenue: pays.find((p) => p.payment_mode === 'cash')?.revenue ?? 0,
+        upiRevenue: pays.find((p) => p.payment_mode === 'upi')?.revenue ?? 0,
+      });
+      result.printed = true;
+    } catch (err: any) {
+      result.printError = err?.message ?? String(err);
+      console.error('Day summary print failed:', err);
+    }
+
+    // After the slip prints, force a cloud sync so end-of-day numbers reach
+    // Supabase even if the next scheduled slot is hours away.
+    result.sync = await syncPendingBills();
+
+    return result;
   });
 
   // ---- PRINTER ----

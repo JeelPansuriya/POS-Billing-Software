@@ -20,6 +20,11 @@ const api = {
     }) => ipcRenderer.invoke('bills:create', payload),
     list: (filter?: { from?: string; to?: string; mealType?: 'lunch' | 'dinner'; limit?: number }) =>
       ipcRenderer.invoke('bills:list', filter ?? {}),
+    void: (billId: string, reason: string) =>
+      ipcRenderer.invoke('bills:void', billId, reason) as Promise<{
+        ok: boolean;
+        error?: string;
+      }>,
   },
   analytics: {
     summary: (range: { from: string; to: string }) =>
@@ -46,6 +51,29 @@ const api = {
   },
   printer: {
     reprint: (billId: string) => ipcRenderer.invoke('printer:reprint', billId),
+  },
+  day: {
+    summary: (dayIso?: string) =>
+      ipcRenderer.invoke('day:summary', dayIso) as Promise<{
+        day: string;
+        totalBills: number;
+        totalPlates: number;
+        totalRevenue: number;
+        firstToken: number | null;
+        lastToken: number | null;
+        lunchPlates: number;
+        lunchRevenue: number;
+        dinnerPlates: number;
+        dinnerRevenue: number;
+        cashRevenue: number;
+        upiRevenue: number;
+      }>,
+    print: (dayIso?: string) =>
+      ipcRenderer.invoke('day:print', dayIso) as Promise<{
+        printed: boolean;
+        printError?: string;
+        sync: { ok: boolean; synced: number; failed: number; reason?: string };
+      }>,
   },
 };
 

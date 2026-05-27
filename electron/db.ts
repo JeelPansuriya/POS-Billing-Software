@@ -41,6 +41,8 @@ export function initDb() {
       total INTEGER NOT NULL,
       payment_mode TEXT NOT NULL CHECK(payment_mode IN ('cash','upi')),
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      voided_at TEXT,
+      void_reason TEXT,
       sync_status TEXT NOT NULL DEFAULT 'pending' CHECK(sync_status IN ('pending','synced','failed'))
     );
 
@@ -52,6 +54,19 @@ export function initDb() {
       value TEXT NOT NULL
     );
   `);
+
+  // Migration: add void columns if missing on an older bills table.
+  const billCols = db
+    .prepare(`PRAGMA table_info(bills)`)
+    .all() as Array<{ name: string }>;
+  const hasVoidedAt = billCols.some((c) => c.name === 'voided_at');
+  const hasVoidReason = billCols.some((c) => c.name === 'void_reason');
+  if (!hasVoidedAt) {
+    db.exec(`ALTER TABLE bills ADD COLUMN voided_at TEXT`);
+  }
+  if (!hasVoidReason) {
+    db.exec(`ALTER TABLE bills ADD COLUMN void_reason TEXT`);
+  }
 
   // Migration: if an older `bills` table still has the 'online' check constraint,
   // recreate it with 'upi' and map existing rows.
@@ -71,12 +86,16 @@ export function initDb() {
         total INTEGER NOT NULL,
         payment_mode TEXT NOT NULL CHECK(payment_mode IN ('cash','upi')),
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        voided_at TEXT,
+        void_reason TEXT,
         sync_status TEXT NOT NULL DEFAULT 'pending' CHECK(sync_status IN ('pending','synced','failed'))
       );
-      INSERT INTO bills (id, token_no, plates, meal_type, price_per_plate, total, payment_mode, created_at, sync_status)
+      INSERT INTO bills (id, token_no, plates, meal_type, price_per_plate, total, payment_mode, created_at, voided_at, void_reason, sync_status)
         SELECT id, token_no, plates, meal_type, price_per_plate, total,
                CASE WHEN payment_mode='online' THEN 'upi' ELSE payment_mode END,
-               created_at, sync_status
+               created_at,
+               NULL, NULL,
+               sync_status
           FROM bills_old;
       DROP TABLE bills_old;
       CREATE INDEX IF NOT EXISTS idx_bills_created ON bills(created_at);
@@ -103,20 +122,36 @@ export function initDb() {
     insert.run('dinner', 150);
   }
 
-  // Seed default restaurant name
-  const nameRow = db.prepare("SELECT value FROM settings WHERE key='restaurant_name'").get();
-  if (!nameRow) {
-    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(
-      'restaurant_name',
-      'Girr Kathiyawadi'
-    );
-  }
+  // Seed default settings
+  const seedSetting = (key: string, value: string) => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    if (!row) db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, value);
+  };
+  seedSetting('restaurant_name', 'Girr Kathiyawadi');
+  // Comma-separated 24h HH:MM times — defaults: lunch close, dinner peak, end of day.
+  seedSetting('backup_schedule', '15:00,20:00,23:00');
+}
+
+/**
+ * Today's date as YYYY-MM-DD in the **local** timezone.
+ *
+ * `new Date().toISOString().slice(0,10)` would give the UTC date, which for
+ * India (UTC+5:30) flips at 05:30 AM IST and causes "today" to disagree
+ * between SQLite (which stores `created_at` in UTC) and the user-facing UI.
+ * Pairing this with `date(created_at, 'localtime')` in queries keeps every
+ * "day" boundary at local midnight.
+ */
+export function localISODate(d: Date = new Date()): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 export function nextTokenNo(): number {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localISODate();
   const row = db
-    .prepare("SELECT COUNT(*) as c FROM bills WHERE date(created_at)=?")
+    .prepare("SELECT COUNT(*) as c FROM bills WHERE date(created_at, 'localtime') = ?")
     .get(today) as { c: number };
   return row.c + 1;
 }

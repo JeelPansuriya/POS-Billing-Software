@@ -1,0 +1,37 @@
+name: Build & Release
+
+# Triggered when you push a tag like `v0.1.0`. Builds the Windows installer
+# on a Windows runner and attaches it to the matching GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required to create the GitHub Release & upload assets
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild native modules for Electron
+        run: npm run rebuild
+
+      - name: Build & publish to GitHub Releases
+        env:
+          # GH_TOKEN is what electron-builder uses to upload to the Release.
+          # GITHUB_TOKEN is automatically provided to the workflow.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release

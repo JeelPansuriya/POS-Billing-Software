@@ -7,9 +7,15 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const [pending, setPending] = useState<number>(0);
   const [online, setOnline] = useState<boolean>(navigator.onLine);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncFlash, setSyncFlash] = useState<string | null>(null);
 
   useEffect(() => {
-    const tick = async () => setPending(await window.api.sync.pendingCount());
+    const tick = async () => {
+      setPending(await window.api.sync.pendingCount());
+      setLastSyncAt(await window.api.settings.get('last_sync_at'));
+    };
     tick();
     const id = setInterval(tick, 5000);
     const on = () => {
@@ -25,6 +31,41 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       window.removeEventListener('offline', off);
     };
   }, []);
+
+  const triggerSync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncFlash(null);
+    try {
+      const res = await window.api.sync.now();
+      setLastSyncAt(await window.api.settings.get('last_sync_at'));
+      setPending(await window.api.sync.pendingCount());
+      if (res.ok) {
+        setSyncFlash(
+          res.synced > 0 ? `Synced ${res.synced}` : 'Up to date'
+        );
+      } else {
+        setSyncFlash(`Failed: ${res.reason ?? 'unknown'}`);
+      }
+      setTimeout(() => setSyncFlash(null), 2500);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const syncLabel = (() => {
+    if (!lastSyncAt) return 'never';
+    const diffMin = Math.round((Date.now() - new Date(lastSyncAt).getTime()) / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return `${Math.floor(diffHr / 24)}d ago`;
+  })();
+  // Warn if it's been more than 6 hours since the last successful upload.
+  const syncOverdue = lastSyncAt
+    ? Date.now() - new Date(lastSyncAt).getTime() > 6 * 60 * 60 * 1000
+    : true;
 
   const tab = (path: string, label: string) => {
     const active = loc.pathname === path;
@@ -72,20 +113,43 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </button>
           </div>
 
-          <div
-            className={`flex items-center gap-2 text-xs px-2 py-1 rounded ${
-              online ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
-            }`}
-            title={online ? 'Online' : 'Offline — bills are saved locally'}
+          <button
+            type="button"
+            onClick={triggerSync}
+            disabled={syncing || !online}
+            className={`flex items-center gap-2 text-xs px-2 py-1 rounded transition ${
+              !online
+                ? 'bg-amber-100 text-amber-800 cursor-not-allowed'
+                : syncOverdue
+                ? 'bg-red-100 text-red-800 hover:bg-red-200'
+                : 'bg-green-100 text-green-800 hover:bg-green-200'
+            } ${syncing ? 'opacity-70 cursor-wait' : ''}`}
+            title={
+              online
+                ? `Last cloud backup: ${syncLabel}${pending > 0 ? ` · ${pending} unsynced` : ''}\nClick to sync now.`
+                : 'Offline — bills are saved locally'
+            }
           >
             <span
-              className={`w-2 h-2 rounded-full ${online ? 'bg-green-500' : 'bg-amber-500'}`}
+              className={`w-2 h-2 rounded-full ${
+                !online
+                  ? 'bg-amber-500'
+                  : syncOverdue
+                  ? 'bg-red-500'
+                  : 'bg-green-500'
+              } ${syncing ? 'animate-pulse' : ''}`}
             />
-            {online ? 'Online' : 'Offline'}
-            {pending > 0 && (
-              <span className="ml-1 font-bold">({pending} unsynced)</span>
+            {!online
+              ? 'Offline'
+              : syncing
+              ? 'Syncing…'
+              : syncFlash
+              ? syncFlash
+              : `Synced ${syncLabel}`}
+            {!syncing && !syncFlash && pending > 0 && (
+              <span className="ml-1 font-bold">({pending})</span>
             )}
-          </div>
+          </button>
 
           <span className="text-sm text-gray-600">
             {user?.username} <span className="text-xs uppercase text-gray-400">({user?.role})</span>

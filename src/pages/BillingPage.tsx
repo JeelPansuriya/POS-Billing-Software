@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../store';
 import type { PaymentMode } from '../types';
+import DaySummaryModal from '../components/DaySummaryModal';
+import VoidBillModal from '../components/VoidBillModal';
 
-const QUICK_PLATES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 50];
+const QUICK_PLATES = [1, 2, 3, 4, 5, 6, 7, 8];
 
 export default function BillingPage() {
   const mealType = useApp((s) => s.mealType);
@@ -26,6 +28,13 @@ export default function BillingPage() {
     cash: number;
     upi: number;
   }>({ nextTokenNo: 1, bills: 0, plates: 0, revenue: 0, cash: 0, upi: 0 });
+  const [showSummary, setShowSummary] = useState(false);
+  const [voidTarget, setVoidTarget] = useState<{
+    id: string;
+    token_no: number;
+    plates: number;
+    total: number;
+  } | null>(null);
 
   const refreshPrices = async () => setPrices(await window.api.prices.get());
   const refreshRecent = async () => {
@@ -77,8 +86,16 @@ export default function BillingPage() {
       <div className="flex-1 p-6 bg-white border-r overflow-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold text-gray-800">Select Plates</h2>
-          <div className="text-sm text-gray-500">
-            Tap a number to set plate count, or use +/− on the right
+          <div className="flex items-center gap-3">
+            <div className="text-sm text-gray-500 hidden xl:block">
+              Tap a number to set plate count, or use +/−
+            </div>
+            <button
+              onClick={() => setShowSummary(true)}
+              className="px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-900 text-white text-sm font-medium"
+            >
+              📊 Day Summary
+            </button>
           </div>
         </div>
 
@@ -108,32 +125,69 @@ export default function BillingPage() {
             {recent.length === 0 && (
               <div className="p-4 text-sm text-gray-400">No bills yet today.</div>
             )}
-            {recent.map((b) => (
-              <div
-                key={b.id}
-                className="flex items-center justify-between px-3 py-2 border-b last:border-b-0 text-sm"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="font-bold text-brand-700">#{b.token_no}</span>
-                  <span className="text-gray-500">
-                    {new Date(b.created_at).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
-                  <span className="text-xs uppercase text-gray-400">{b.meal_type}</span>
-                  <span>{b.plates} plates</span>
-                  <span className="font-semibold">₹{b.total}</span>
-                  <span className="text-xs text-gray-500">{b.payment_mode}</span>
-                </div>
-                <button
-                  onClick={() => window.api.printer.reprint(b.id)}
-                  className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-white"
+            {recent.map((b) => {
+              const isVoided = !!b.voided_at;
+              return (
+                <div
+                  key={b.id}
+                  className={`flex items-center justify-between px-3 py-2 border-b last:border-b-0 text-sm ${
+                    isVoided ? 'bg-red-50/60' : ''
+                  }`}
                 >
-                  Reprint
-                </button>
-              </div>
-            ))}
+                  <div
+                    className={`flex items-center gap-3 ${
+                      isVoided ? 'line-through text-gray-400' : ''
+                    }`}
+                  >
+                    <span className={isVoided ? 'font-bold' : 'font-bold text-brand-700'}>
+                      #{b.token_no}
+                    </span>
+                    <span className="text-gray-500">
+                      {new Date(b.created_at).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    <span className="text-xs uppercase text-gray-400">{b.meal_type}</span>
+                    <span>{b.plates} plates</span>
+                    <span className="font-semibold">₹{b.total}</span>
+                    <span className="text-xs text-gray-500">{b.payment_mode}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isVoided ? (
+                      <span
+                        className="text-xs px-2 py-1 rounded bg-red-100 text-red-700 font-semibold"
+                        title={b.void_reason ?? 'Voided'}
+                      >
+                        VOIDED
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => window.api.printer.reprint(b.id)}
+                          className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-white"
+                        >
+                          Reprint
+                        </button>
+                        <button
+                          onClick={() =>
+                            setVoidTarget({
+                              id: b.id,
+                              token_no: b.token_no,
+                              plates: b.plates,
+                              total: b.total,
+                            })
+                          }
+                          className="text-xs px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-50"
+                        >
+                          Void
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -250,6 +304,19 @@ export default function BillingPage() {
           </div>
         )}
       </div>
+
+      {showSummary && <DaySummaryModal onClose={() => setShowSummary(false)} />}
+
+      {voidTarget && (
+        <VoidBillModal
+          bill={voidTarget}
+          onClose={() => setVoidTarget(null)}
+          onVoided={() => {
+            refreshRecent();
+            refreshStats();
+          }}
+        />
+      )}
     </div>
   );
 }

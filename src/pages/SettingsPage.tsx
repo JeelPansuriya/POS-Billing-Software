@@ -8,6 +8,7 @@ export default function SettingsPage() {
   const [printerName, setPrinterName] = useState('');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseKey, setSupabaseKey] = useState('');
+  const [backupSchedule, setBackupSchedule] = useState('15:00,20:00,23:00');
   const [oldPwd, setOldPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [msg, setMsg] = useState('');
@@ -20,6 +21,9 @@ export default function SettingsPage() {
     setPrinterName((await window.api.settings.get('printer_name')) ?? '');
     setSupabaseUrl((await window.api.settings.get('supabase_url')) ?? '');
     setSupabaseKey((await window.api.settings.get('supabase_anon_key')) ?? '');
+    setBackupSchedule(
+      (await window.api.settings.get('backup_schedule')) ?? '15:00,20:00,23:00'
+    );
   };
 
   useEffect(() => {
@@ -38,6 +42,7 @@ export default function SettingsPage() {
     await window.api.settings.set('printer_name', printerName);
     await window.api.settings.set('supabase_url', supabaseUrl);
     await window.api.settings.set('supabase_anon_key', supabaseKey);
+    await window.api.settings.set('backup_schedule', backupSchedule.trim());
     flash('Settings saved.');
   };
 
@@ -127,6 +132,19 @@ export default function SettingsPage() {
               className="input"
             />
           </Field>
+          <Field label="Backup Schedule (24h, comma-separated)">
+            <input
+              value={backupSchedule}
+              onChange={(e) => setBackupSchedule(e.target.value)}
+              placeholder="15:00,20:00,23:00"
+              className="input"
+            />
+          </Field>
+          <p className="text-xs text-gray-500 mt-1">
+            Auto-syncs to Supabase at each listed time. Defaults: 3 PM (lunch close),
+            8 PM (dinner peak), 11 PM (end of day). If the app was offline at that time,
+            it catches up on the next launch.
+          </p>
           <button
             onClick={syncNow}
             className="mt-2 px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium"
