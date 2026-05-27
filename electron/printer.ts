@@ -99,29 +99,30 @@ export async function printToken(bill: Bill) {
         ...fullWidth,
         fontWeight: 'bold',
         textAlign: 'center',
+        padding: '4px 0',
         fontSize: '14px',
         lineHeight: '1.2',
       },
     },
-    // Bottom feed: visible-but-white character with explicit height.
-    // A real glyph is required; whitespace gets collapsed by the renderer.
     {
       type: 'text',
-      value: '.',
+      value: '&nbsp;',
       style: {
         ...fullWidth,
-        color: 'white',
-        fontSize: '30px',
-        lineHeight: '30px',
-        height: '30px',
+        borderTop: '1px dashed #000',
+        fontSize: '0',
+        lineHeight: '0',
+        height: '0',
+        width: 'auto',
+        marginTop: '2px',
+        marginRight: '28px',
       },
     },
   ];
 
   const options: PosPrintOptions = {
     preview: false,
-    // top right bottom left — extra bottom margin gives the cutter clearance.
-    margin: '0 0 30px 0',
+    margin: '0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
@@ -208,22 +209,11 @@ export async function printTest() {
         lineHeight: '1.2',
       },
     },
-    {
-      type: 'text',
-      value: '.',
-      style: {
-        ...fullWidth,
-        color: 'white',
-        fontSize: '30px',
-        lineHeight: '30px',
-        height: '30px',
-      },
-    },
   ];
 
   const options: PosPrintOptions = {
     preview: false,
-    margin: '0 0 30px 0',
+    margin: '0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
