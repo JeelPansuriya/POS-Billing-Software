@@ -12,6 +12,7 @@ export default function SettingsPage() {
   const [oldPwd, setOldPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [msg, setMsg] = useState('');
+  const [msgKind, setMsgKind] = useState<'ok' | 'err'>('ok');
   const [syncStatus, setSyncStatus] = useState('');
   const [exportDir, setExportDir] = useState('');
   const [lastExportAt, setLastExportAt] = useState<string | null>(null);
@@ -37,19 +38,76 @@ export default function SettingsPage() {
     load();
   }, []);
 
-  const flash = (m: string) => {
+  const flash = (m: string, kind: 'ok' | 'err' = 'ok') => {
     setMsg(m);
-    setTimeout(() => setMsg(''), 2500);
+    setMsgKind(kind);
+    setTimeout(() => setMsg(''), kind === 'err' ? 5000 : 2500);
+  };
+
+  // Catches the most common paste mistakes: trailing whitespace, the placeholder
+  // string from the README, the wrong shape entirely. The downside of skipping
+  // this check is a silent 404 from Supabase on the next sync — the user only
+  // finds out hours later when scheduled backup fails.
+  const validateSupabase = (
+    url: string,
+    key: string
+  ): { ok: true } | { ok: false; error: string } => {
+    if (!url && !key) return { ok: true };
+    if (!url) return { ok: false, error: 'Supabase URL is missing.' };
+    if (!key) return { ok: false, error: 'Supabase anon key is missing.' };
+    if (/PASTE_YOUR_ANON|YOUR-PROJECT-REF/i.test(url) || /PASTE_YOUR_ANON/i.test(key)) {
+      return { ok: false, error: 'Replace the placeholder text with the real values from Supabase.' };
+    }
+    if (!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?(rest\/v1\/?)?$/i.test(url.trim())) {
+      return {
+        ok: false,
+        error: 'Supabase URL should look like https://xxxx.supabase.co (no trailing path).',
+      };
+    }
+    // Anon keys are JWTs: three base64url segments separated by dots.
+    if (!/^eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$/.test(key.trim())) {
+      return { ok: false, error: 'Supabase anon key should be a JWT starting with "eyJ".' };
+    }
+    return { ok: true };
+  };
+
+  const validateSchedule = (s: string): { ok: true } | { ok: false; error: string } => {
+    const slots = s
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (slots.length === 0) return { ok: true };
+    for (const slot of slots) {
+      if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(slot)) {
+        return {
+          ok: false,
+          error: `"${slot}" is not a valid 24h HH:MM time.`,
+        };
+      }
+    }
+    return { ok: true };
   };
 
   const saveAll = async () => {
+    const trimmedUrl = supabaseUrl.trim();
+    const trimmedKey = supabaseKey.trim();
+    const trimmedSchedule = backupSchedule.trim();
+    const sup = validateSupabase(trimmedUrl, trimmedKey);
+    if (!sup.ok) return flash(sup.error, 'err');
+    const sch = validateSchedule(trimmedSchedule);
+    if (!sch.ok) return flash(sch.error, 'err');
+
+    setSupabaseUrl(trimmedUrl);
+    setSupabaseKey(trimmedKey);
+    setBackupSchedule(trimmedSchedule);
+
     await window.api.prices.set('lunch', Number(prices.lunch) || 0);
     await window.api.prices.set('dinner', Number(prices.dinner) || 0);
-    await window.api.settings.set('restaurant_name', restaurantName);
-    await window.api.settings.set('printer_name', printerName);
-    await window.api.settings.set('supabase_url', supabaseUrl);
-    await window.api.settings.set('supabase_anon_key', supabaseKey);
-    await window.api.settings.set('backup_schedule', backupSchedule.trim());
+    await window.api.settings.set('restaurant_name', restaurantName.trim());
+    await window.api.settings.set('printer_name', printerName.trim());
+    await window.api.settings.set('supabase_url', trimmedUrl);
+    await window.api.settings.set('supabase_anon_key', trimmedKey);
+    await window.api.settings.set('backup_schedule', trimmedSchedule);
     flash('Settings saved.');
   };
 
@@ -267,7 +325,13 @@ export default function SettingsPage() {
         >
           Save Settings
         </button>
-        {msg && <span className="text-sm text-green-700">{msg}</span>}
+        {msg && (
+          <span
+            className={`text-sm ${msgKind === 'err' ? 'text-red-700' : 'text-green-700'}`}
+          >
+            {msg}
+          </span>
+        )}
       </div>
 
       <style>{`

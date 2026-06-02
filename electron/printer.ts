@@ -25,11 +25,27 @@ export async function printToken(bill: Bill) {
       | undefined)?.value ?? '';
 
   const date = new Date(bill.createdAt);
-  const dateStr = date.toLocaleDateString();
-  const timeStr = date.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = String(date.getFullYear());
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  const dateStr = `${dd}-${mm}-${yyyy}`;
+  const timeStr = `${hh}:${mi}:${ss}`;
+
+  const SEP = '================================';
+  const sep = (): PosPrintData => ({
+    type: 'text',
+    value: SEP,
+    style: {
+      ...fullWidth,
+      textAlign: 'center',
+      fontSize: '10px',
+      lineHeight: '1',
+      margin: '2px 0',
+      letterSpacing: '-1px',
+    },
   });
 
   const data: PosPrintData[] = [
@@ -40,67 +56,112 @@ export async function printToken(bill: Bill) {
         ...fullWidth,
         fontWeight: 'bold',
         textAlign: 'center',
-        fontSize: '16px',
+        fontSize: '20px',
         lineHeight: '1.1',
+        marginBottom: '4px',
+      },
+    },
+    sep(),
+    {
+      type: 'text',
+      value: `Bill No   : ${bill.tokenNo}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'left',
+        fontSize: '16px',
+        fontWeight: 'bold',
+        lineHeight: '1.3',
       },
     },
     {
+      type: 'text',
+      value: `Date : ${dateStr} | Time : ${timeStr}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'left',
+        fontSize: '11px',
+        lineHeight: '1.3',
+      },
+    },
+    {
+      type: 'text',
+      value: `Meal      : ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'left',
+        fontSize: '13px',
+        fontWeight: 'bold',
+        lineHeight: '1.3',
+      },
+    },
+    sep(),
+    {
       type: 'table',
       style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
-      tableHeader: [],
+      tableHeader: [
+        {
+          type: 'text',
+          value: 'SNo',
+          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '15%' },
+        },
+        {
+          type: 'text',
+          value: 'NAME',
+          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '55%' },
+        },
+        {
+          type: 'text',
+          value: 'QTY',
+          style: {
+            textAlign: 'right',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            width: '30%',
+            paddingRight: '12px',
+          },
+        },
+      ],
       tableBody: [
         [
           {
             type: 'text',
-            value: `${dateStr} ${timeStr} ${bill.mealType.toUpperCase()}`,
+            value: '1',
+            style: { textAlign: 'left', fontSize: '12px', padding: '2px 0' },
+          },
+          {
+            type: 'text',
+            value: 'THALI',
             style: {
               textAlign: 'left',
-              fontSize: '10px',
-              lineHeight: '1.2',
-              padding: '0',
-              margin: '0',
+              fontSize: '13px',
+              fontWeight: 'bold',
+              padding: '2px 0',
             },
           },
           {
-            // Trailing non-breaking spaces push the token away from the
-            // paper's right edge — CSS padding/margin gets ignored here.
             type: 'text',
-            value: `TOKEN #${bill.tokenNo}${NBSP}${NBSP}${NBSP}`,
+            value: `${bill.plates}${NBSP}${NBSP}${NBSP}`,
             style: {
               textAlign: 'right',
+              fontSize: '16px',
               fontWeight: 'bold',
-              fontSize: '14px',
-              lineHeight: '1.2',
-              padding: '0',
-              margin: '0',
+              padding: '2px 0',
             },
           },
         ],
       ],
       tableFooter: [],
     },
+    sep(),
     {
       type: 'text',
-      value: `THALI x ${bill.plates}${NBSP}${NBSP}${NBSP}`,
-      style: {
-        ...fullWidth,
-        fontWeight: 'bold',
-        textAlign: 'center',
-        fontSize: '40px',
-        marginTop: '2px',
-        marginBottom: '2px',
-        lineHeight: '1',
-      },
-    },
-    {
-      type: 'text',
-      value: `TOTAL Rs.${bill.total}  -  ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+      value: `TOTAL Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
         textAlign: 'center',
         padding: '4px 0',
-        fontSize: '14px',
+        fontSize: '15px',
         lineHeight: '1.2',
       },
     },
@@ -114,7 +175,7 @@ export async function printToken(bill: Bill) {
         lineHeight: '0',
         height: '0',
         width: 'auto',
-        marginTop: '2px',
+        marginTop: '4px',
         marginRight: '28px',
       },
     },

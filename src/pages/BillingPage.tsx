@@ -22,6 +22,8 @@ export default function BillingPage() {
     printError?: string;
   } | null>(null);
   const [recent, setRecent] = useState<any[]>([]);
+  const [tokenSearch, setTokenSearch] = useState('');
+  const [searchHits, setSearchHits] = useState<any[] | null>(null);
   const [stats, setStats] = useState<{
     nextTokenNo: number;
     bills: number;
@@ -46,6 +48,20 @@ export default function BillingPage() {
     setRecent(list);
   };
   const refreshStats = async () => setStats(await window.api.stats.today());
+
+  // Token-number lookup. Token numbers reset each day, so a search may return
+  // multiple rows (one per day with that number) — newest first via the IPC's
+  // ORDER BY created_at DESC. Empty input clears the search and reverts to
+  // the today-only recent list.
+  const runTokenSearch = async (raw: string) => {
+    const n = Number(raw.trim());
+    if (!raw.trim() || !Number.isFinite(n) || n <= 0) {
+      setSearchHits(null);
+      return;
+    }
+    const list = await window.api.bills.list({ tokenNo: Math.floor(n), limit: 50 });
+    setSearchHits(list);
+  };
 
   useEffect(() => {
     refreshPrices();
@@ -190,12 +206,31 @@ export default function BillingPage() {
 
         {/* Recent bills today */}
         <div className="mt-8">
-          <h3 className="text-sm font-semibold text-gray-600 mb-2">Today's recent tokens</h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-gray-600">
+              {searchHits !== null
+                ? `Search results for token #${tokenSearch.trim()}`
+                : "Today's recent tokens"}
+            </h3>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={tokenSearch}
+              onChange={(e) => {
+                setTokenSearch(e.target.value);
+                runTokenSearch(e.target.value);
+              }}
+              placeholder="Find token #"
+              className="px-2 py-1 text-sm border border-gray-300 rounded w-40"
+            />
+          </div>
           <div className="bg-gray-50 rounded-lg border border-gray-200 max-h-44 overflow-auto">
-            {recent.length === 0 && (
-              <div className="p-4 text-sm text-gray-400">No bills yet today.</div>
+            {(searchHits ?? recent).length === 0 && (
+              <div className="p-4 text-sm text-gray-400">
+                {searchHits !== null ? 'No bills with that token number.' : 'No bills yet today.'}
+              </div>
             )}
-            {recent.map((b) => {
+            {(searchHits ?? recent).map((b) => {
               const isVoided = !!b.voided_at;
               return (
                 <div
@@ -213,10 +248,17 @@ export default function BillingPage() {
                       #{b.token_no}
                     </span>
                     <span className="text-gray-500">
-                      {new Date(b.created_at).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                      {searchHits !== null
+                        ? new Date(b.created_at).toLocaleString([], {
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : new Date(b.created_at).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
                     </span>
                     <span className="text-xs uppercase text-gray-400">{b.meal_type}</span>
                     <span>{b.plates} plates</span>

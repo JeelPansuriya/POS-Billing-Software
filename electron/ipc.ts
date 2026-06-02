@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { getDb, localISODate, nextTokenNo, writeAudit } from './db';
 import { printToken, printDaySummary, printTest } from './printer';
 import { syncPendingBills } from './sync';
+import { pushSetting, pushPrices } from './settings-sync';
+import { previewTokenPdf } from './preview-pdf';
 import { exportDay, openExportFolder, getExportDir } from './export';
 import { dialog } from 'electron';
 
@@ -42,7 +44,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     const row = getDb()
       .prepare('SELECT id, username, password_hash, role FROM users WHERE username = ?')
       .get(username) as
-      | { id: string; username: string; password_hash: string; role: 'manager' | 'owner' }
+      | { id: string; username: string; password_hash: string; role: 'manager' | 'admin' }
       | undefined;
     if (!row) {
       writeAudit({ actorUsername: username, action: 'login_failed', details: { reason: 'unknown_user' } });
@@ -113,6 +115,10 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
         entityId: mealType,
         details: { from: prev?.price_per_plate ?? null, to: pricePerPlate },
       });
+      // Best-effort push to other devices. Failure tolerated — local write
+      // already succeeded and the pull tick on this device will resync if
+      // the cloud later disagrees.
+      pushPrices().catch((e) => console.error('pushPrices after prices:set failed:', e));
       return { ok: true };
     }
   );
@@ -222,7 +228,13 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     'bills:list',
     (
       _e,
-      filter: { from?: string; to?: string; mealType?: 'lunch' | 'dinner'; limit?: number } = {}
+      filter: {
+        from?: string;
+        to?: string;
+        mealType?: 'lunch' | 'dinner';
+        tokenNo?: number;
+        limit?: number;
+      } = {}
     ) => {
       const where: string[] = [];
       const params: any[] = [];
@@ -237,6 +249,10 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       if (filter.mealType) {
         where.push('meal_type = ?');
         params.push(filter.mealType);
+      }
+      if (typeof filter.tokenNo === 'number' && Number.isFinite(filter.tokenNo)) {
+        where.push('token_no = ?');
+        params.push(filter.tokenNo);
       }
       const sql = `SELECT * FROM bills ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`;
       params.push(filter.limit ?? 1000);
@@ -257,6 +273,14 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       )
       .get(today) as { bills: number; plates: number; revenue: number };
 
+    // Token numbers never reuse — voided rows still consume their slot, so the
+    // preview must match what nextTokenNo() will actually assign on save.
+    const tokenCount = getDb()
+      .prepare(
+        `SELECT COUNT(*) as c FROM bills WHERE date(created_at, 'localtime') = ?`
+      )
+      .get(today) as { c: number };
+
     const byPay = getDb()
       .prepare(
         `SELECT payment_mode, COALESCE(SUM(total), 0) as revenue
@@ -271,7 +295,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     const upi = byPay.find((p) => p.payment_mode === 'upi')?.revenue ?? 0;
 
     return {
-      nextTokenNo: totals.bills + 1,
+      nextTokenNo: tokenCount.c + 1,
       bills: totals.bills,
       plates: totals.plates,
       revenue: totals.revenue,
@@ -393,6 +417,9 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
         ? { from_len: prev?.value?.length ?? 0, to_len: value?.length ?? 0 }
         : { from: prev?.value ?? null, to: value },
     });
+    // Cross-device push (whitelist-gated inside pushSetting). Per-device keys
+    // like printer_name and supabase_url are filtered out so they stay local.
+    pushSetting(key, value).catch((e) => console.error('pushSetting failed:', e));
     return { ok: true };
   });
 
@@ -864,6 +891,10 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       });
       return { ok: false, error: msg };
     }
+  });
+
+  ipcMain.handle('preview:tokenPdf', async (_e, billId?: string) => {
+    return previewTokenPdf(billId);
   });
 
   ipcMain.handle('printer:reprint', async (_e, billId: string) => {

@@ -15,28 +15,27 @@ export default function App() {
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
-  // Dev-only: auto-login as owner once on initial mount so we don't sign in every reload.
+  // Dev-only: auto-login as admin once on initial mount so we don't sign in every reload.
   // Stripped from production builds because import.meta.env.DEV is statically false.
-  // Manual logout still works — this only runs once.
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     (async () => {
-      const res = await window.api.auth.login('owner', 'owner123');
+      const res = await window.api.auth.login('admin', 'admin123');
       if (res.ok) setUser(res.user);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // First-launch gate: only the owner sees the wizard, and only when the
+  // First-launch gate: only admin sees the wizard, and only when the
   // restaurant name or either price hasn't been configured yet. Managers
-  // logging in first don't see it — they can't fix prices anyway.
+  // logging in first don't see it — they can't change prices anyway.
   useEffect(() => {
     if (!user) {
       setOnboardingChecked(false);
       setNeedsOnboarding(false);
       return;
     }
-    if (user.role !== 'owner') {
+    if (user.role !== 'admin') {
       setOnboardingChecked(true);
       setNeedsOnboarding(false);
       return;
@@ -56,23 +55,11 @@ export default function App() {
     <AppLayout>
       <Routes>
         <Route path="/" element={<BillingPage />} />
-        <Route
-          path="/tools"
-          element={
-            user.role === 'manager' || user.role === 'owner' ? (
-              <ToolsPage />
-            ) : (
-              <Navigate to="/" replace />
-            )
-          }
-        />
-        <Route
-          path="/analytics"
-          element={user.role === 'owner' ? <AnalyticsPage /> : <Navigate to="/" replace />}
-        />
+        <Route path="/tools" element={<ToolsPage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
         <Route
           path="/settings"
-          element={user.role === 'owner' ? <SettingsPage /> : <Navigate to="/" replace />}
+          element={user.role === 'admin' ? <SettingsPage /> : <Navigate to="/" replace />}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

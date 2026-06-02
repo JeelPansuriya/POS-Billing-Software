@@ -22,7 +22,7 @@ export function initDb() {
       id TEXT PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('manager','owner')),
+      role TEXT NOT NULL CHECK(role IN ('manager','admin')),
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -77,6 +77,36 @@ export function initDb() {
       recorded_by_username TEXT
     );
   `);
+
+  // Migration: rename role 'owner' → 'admin'. SQLite can't ALTER a CHECK
+  // constraint in place, so recreate the users table when we still see the
+  // old value in sqlite_master. The seeded 'owner' user is renamed to 'admin'
+  // while keeping its password_hash so existing installs don't get locked out.
+  const usersTbl = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
+    .get() as { sql: string } | undefined;
+  if (usersTbl && usersTbl.sql.includes("'owner'")) {
+    db.exec(`
+      BEGIN;
+      ALTER TABLE users RENAME TO users_old;
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('manager','admin')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO users (id, username, password_hash, role, created_at)
+        SELECT id,
+               CASE WHEN username = 'owner' THEN 'admin' ELSE username END,
+               password_hash,
+               CASE WHEN role = 'owner' THEN 'admin' ELSE role END,
+               created_at
+          FROM users_old;
+      DROP TABLE users_old;
+      COMMIT;
+    `);
+  }
 
   // Migration: add void columns if missing on an older bills table.
   const billCols = db
@@ -134,7 +164,7 @@ export function initDb() {
       'INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)'
     );
     insert.run(randomUUID(), 'manager', bcrypt.hashSync('manager123', 10), 'manager');
-    insert.run(randomUUID(), 'owner', bcrypt.hashSync('owner123', 10), 'owner');
+    insert.run(randomUUID(), 'admin', bcrypt.hashSync('admin123', 10), 'admin');
   }
 
   // Seed default prices
@@ -150,7 +180,13 @@ export function initDb() {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
     if (!row) db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, value);
   };
-  seedSetting('restaurant_name', 'Girr Kathiyawadi');
+  seedSetting('restaurant_name', 'Jay Girr Kathiyawadi');
+  // One-time rename for installs that still hold the original default. Custom
+  // values set via Settings are left untouched.
+  db.prepare(
+    `UPDATE settings SET value = 'Jay Girr Kathiyawadi'
+       WHERE key = 'restaurant_name' AND value = 'Girr Kathiyawadi'`
+  ).run();
   // Comma-separated 24h HH:MM times — defaults: lunch close, dinner peak, end of day.
   seedSetting('backup_schedule', '15:00,20:00,23:00');
 }

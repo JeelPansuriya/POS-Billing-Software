@@ -6,7 +6,7 @@ declare global {
   }
 }
 
-export type Role = 'manager' | 'owner';
+export type Role = 'manager' | 'admin';
 export type MealType = 'lunch' | 'dinner';
 export type PaymentMode = 'cash' | 'upi';
 

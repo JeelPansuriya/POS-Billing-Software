@@ -23,8 +23,13 @@ const api = {
       mealType: 'lunch' | 'dinner';
       paymentMode: 'cash' | 'upi';
     }) => ipcRenderer.invoke('bills:create', payload),
-    list: (filter?: { from?: string; to?: string; mealType?: 'lunch' | 'dinner'; limit?: number }) =>
-      ipcRenderer.invoke('bills:list', filter ?? {}),
+    list: (filter?: {
+      from?: string;
+      to?: string;
+      mealType?: 'lunch' | 'dinner';
+      tokenNo?: number;
+      limit?: number;
+    }) => ipcRenderer.invoke('bills:list', filter ?? {}),
     void: (billId: string, reason: string) =>
       ipcRenderer.invoke('bills:void', billId, reason) as Promise<{
         ok: boolean;
@@ -62,6 +67,10 @@ const api = {
     reprint: (billId: string) => ipcRenderer.invoke('printer:reprint', billId),
     test: () =>
       ipcRenderer.invoke('printer:test') as Promise<{ ok: boolean; error?: string }>,
+    previewPdf: (billId?: string) =>
+      ipcRenderer.invoke('preview:tokenPdf', billId) as Promise<
+        { ok: true; path: string } | { ok: false; error: string }
+      >,
   },
   audit: {
     list: (filter?: { limit?: number; action?: string }) =>
@@ -127,6 +136,50 @@ const api = {
     getDir: () => ipcRenderer.invoke('export:getDir') as Promise<string>,
     pickDir: () =>
       ipcRenderer.invoke('export:pickDir') as Promise<{ ok: boolean; path?: string }>,
+  },
+  updates: {
+    status: () =>
+      ipcRenderer.invoke('updates:status') as Promise<{
+        phase:
+          | 'idle'
+          | 'checking'
+          | 'available'
+          | 'not-available'
+          | 'downloading'
+          | 'downloaded'
+          | 'error';
+        version: string;
+        newVersion?: string;
+        progressPct?: number;
+        error?: string;
+        checkedAt?: string;
+      }>,
+    check: () =>
+      ipcRenderer.invoke('updates:check') as Promise<{ ok: boolean; error?: string }>,
+    install: () => ipcRenderer.invoke('updates:install'),
+    onEvent: (
+      cb: (s: {
+        phase:
+          | 'idle'
+          | 'checking'
+          | 'available'
+          | 'not-available'
+          | 'downloading'
+          | 'downloaded'
+          | 'error';
+        version: string;
+        newVersion?: string;
+        progressPct?: number;
+        error?: string;
+        checkedAt?: string;
+      }) => void
+    ) => {
+      const listener = (_e: unknown, s: any) => cb(s);
+      ipcRenderer.on('updates:event', listener);
+      return () => {
+        ipcRenderer.off('updates:event', listener);
+      };
+    },
   },
   day: {
     summary: (dayIso?: string) =>

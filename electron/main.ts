@@ -4,6 +4,7 @@ import { autoUpdater } from 'electron-updater';
 import { initDb, getDb, writeAudit } from './db';
 import { registerIpcHandlers } from './ipc';
 import { maybeRunScheduledSync } from './sync';
+import { pullRemoteSettings } from './settings-sync';
 import { maybeRunDailyExport } from './export';
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
@@ -71,34 +72,129 @@ app.whenReady().then(() => {
   // while the app was closed.
   maybeRunScheduledSync().catch((e) => console.error('Startup sync failed:', e));
   maybeRunDailyExport().catch((e) => console.error('Startup export failed:', e));
-  // Then check every minute.
+  pullRemoteSettings().catch((e) => console.error('Startup settings pull failed:', e));
+  // Settings change rarely (admin tweaks a price once every few months), so
+  // pulling on every 5th minute tick keeps Supabase egress comfortably inside
+  // the free-tier monthly bandwidth budget while still propagating remote
+  // changes within ~5 minutes.
+  let tickCount = 0;
   setInterval(() => {
+    tickCount += 1;
     maybeRunScheduledSync().catch((e) => console.error('Scheduled sync failed:', e));
     maybeRunDailyExport().catch((e) => console.error('Scheduled export failed:', e));
+    if (tickCount % 5 === 0) {
+      pullRemoteSettings().catch((e) => console.error('Settings pull failed:', e));
+    }
   }, 60_000);
 
-  // Auto-update check (production only — there's no published version while
-  // running `npm run dev`). Uses the GitHub Releases provider declared in
-  // package.json#build.publish.
-  if (!isDev) {
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.on('update-downloaded', async () => {
-      const { response } = await dialog.showMessageBox({
-        type: 'info',
-        buttons: ['Restart now', 'Later'],
-        defaultId: 0,
-        title: 'Update ready',
-        message:
-          'A new version of Girr Kathiyawadi POS has been downloaded. Restart now to install? It will install automatically the next time you close the app.',
-      });
-      if (response === 0) autoUpdater.quitAndInstall();
+  // Auto-update wiring. Events broadcast to the renderer so the Tools page
+  // can show live status; the native dialog on `update-downloaded` is kept
+  // as a backup so a manager who isn't on Tools still sees the prompt.
+  type UpdaterPhase =
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error';
+  let updaterStatus: {
+    phase: UpdaterPhase;
+    version: string;
+    newVersion?: string;
+    progressPct?: number;
+    error?: string;
+    checkedAt?: string;
+  } = { phase: 'idle', version: app.getVersion() };
+  const pushUpdaterStatus = () => {
+    mainWindow?.webContents.send('updates:event', updaterStatus);
+  };
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('checking-for-update', () => {
+    updaterStatus = { ...updaterStatus, phase: 'checking', error: undefined };
+    pushUpdaterStatus();
+  });
+  autoUpdater.on('update-available', (info) => {
+    updaterStatus = {
+      ...updaterStatus,
+      phase: 'downloading',
+      newVersion: info.version,
+      progressPct: 0,
+      error: undefined,
+    };
+    pushUpdaterStatus();
+  });
+  autoUpdater.on('update-not-available', (info) => {
+    updaterStatus = {
+      ...updaterStatus,
+      phase: 'not-available',
+      newVersion: info.version,
+      error: undefined,
+      checkedAt: new Date().toISOString(),
+    };
+    pushUpdaterStatus();
+  });
+  autoUpdater.on('download-progress', (p) => {
+    updaterStatus = {
+      ...updaterStatus,
+      phase: 'downloading',
+      progressPct: Math.round(p.percent),
+    };
+    pushUpdaterStatus();
+  });
+  autoUpdater.on('update-downloaded', async (info) => {
+    updaterStatus = {
+      ...updaterStatus,
+      phase: 'downloaded',
+      newVersion: info.version,
+      progressPct: 100,
+      error: undefined,
+    };
+    pushUpdaterStatus();
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+      title: 'Update ready',
+      message:
+        'A new version of Girr Kathiyawadi POS has been downloaded. Restart now to install? It will install automatically the next time you close the app.',
     });
-    autoUpdater.on('error', (err) => console.error('Auto-update error:', err));
-    // Check on startup, then every 6 hours.
-    autoUpdater.checkForUpdatesAndNotify().catch((e) => console.error(e));
+    if (response === 0) autoUpdater.quitAndInstall();
+  });
+  autoUpdater.on('error', (err) => {
+    console.error('Auto-update error:', err);
+    updaterStatus = {
+      ...updaterStatus,
+      phase: 'error',
+      error: err?.message ?? String(err),
+    };
+    pushUpdaterStatus();
+  });
+
+  ipcMain.handle('updates:status', () => updaterStatus);
+  ipcMain.handle('updates:check', async () => {
+    if (isDev) {
+      return { ok: false, error: 'Updates only run in installed builds' };
+    }
+    try {
+      await autoUpdater.checkForUpdates();
+      return { ok: true };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) };
+    }
+  });
+  ipcMain.handle('updates:install', () => {
+    if (updaterStatus.phase === 'downloaded') autoUpdater.quitAndInstall();
+  });
+
+  if (!isDev) {
+    // Background check on startup, then every 6 hours. Uses the GitHub
+    // Releases provider declared in package.json#build.publish.
+    autoUpdater.checkForUpdates().catch((e) => console.error(e));
     setInterval(
-      () => autoUpdater.checkForUpdatesAndNotify().catch((e) => console.error(e)),
+      () => autoUpdater.checkForUpdates().catch((e) => console.error(e)),
       6 * 60 * 60 * 1000
     );
   }

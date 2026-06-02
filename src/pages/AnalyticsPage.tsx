@@ -1,21 +1,26 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+
+// Recharts is ~150 KB minified-gzipped. Lazy-loading the chart component
+// keeps it out of the initial billing-page bundle so first paint stays fast;
+// the chunk only fetches when an admin first opens Analytics.
+const AnalyticsCharts = lazy(() => import('./AnalyticsCharts'));
 
 type Range = 'today' | '7d' | '30d' | 'mtd' | 'all';
+
+// SQLite's datetime('now') stores UTC as "YYYY-MM-DD HH:MM:SS" (space, no Z).
+// Range bounds must be sent in the same shape so the WHERE created_at >= ?
+// lexicographic comparison lines up — Date.toISOString() produces a "T"
+// separator that sorts AFTER a space, which silently dropped late-night IST
+// bills out of the "Today" window.
+function toSqliteUtc(d: Date): string {
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mi = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+}
 
 function rangeToDates(r: Range): { from: string; to: string; label: string } {
   const now = new Date();
@@ -26,33 +31,32 @@ function rangeToDates(r: Range): { from: string; to: string; label: string } {
   switch (r) {
     case 'today':
       from.setDate(to.getDate() - 1);
-      return { from: from.toISOString(), to: to.toISOString(), label: 'Today' };
+      return { from: toSqliteUtc(from), to: toSqliteUtc(to), label: 'Today' };
     case '7d':
       from.setDate(to.getDate() - 7);
-      return { from: from.toISOString(), to: to.toISOString(), label: 'Last 7 days' };
+      return { from: toSqliteUtc(from), to: toSqliteUtc(to), label: 'Last 7 days' };
     case '30d':
       from.setDate(to.getDate() - 30);
-      return { from: from.toISOString(), to: to.toISOString(), label: 'Last 30 days' };
+      return { from: toSqliteUtc(from), to: toSqliteUtc(to), label: 'Last 30 days' };
     case 'mtd':
       from.setDate(1);
       from.setHours(0, 0, 0, 0);
-      return { from: from.toISOString(), to: to.toISOString(), label: 'Month to date' };
+      return { from: toSqliteUtc(from), to: toSqliteUtc(to), label: 'Month to date' };
     case 'all':
-      return { from: '1970-01-01T00:00:00Z', to: to.toISOString(), label: 'All time' };
+      return { from: '1970-01-01 00:00:00', to: toSqliteUtc(to), label: 'All time' };
   }
 }
 
-// Returns the immediately preceding period of the same length, useful for
-// delta-vs-previous-period comparisons. "All" has no meaningful previous period.
 function previousPeriod(r: Range): { from: string; to: string } | null {
   if (r === 'all') return null;
   const cur = rangeToDates(r);
-  const curFrom = new Date(cur.from);
-  const curTo = new Date(cur.to);
+  // Parse the SQLite-format strings back to Dates by appending Z so JS reads them as UTC.
+  const curFrom = new Date(cur.from.replace(' ', 'T') + 'Z');
+  const curTo = new Date(cur.to.replace(' ', 'T') + 'Z');
   const span = curTo.getTime() - curFrom.getTime();
-  const prevTo = new Date(curFrom);
+  const prevTo = curFrom;
   const prevFrom = new Date(curFrom.getTime() - span);
-  return { from: prevFrom.toISOString(), to: prevTo.toISOString() };
+  return { from: toSqliteUtc(prevFrom), to: toSqliteUtc(prevTo) };
 }
 
 export default function AnalyticsPage() {
@@ -133,9 +137,6 @@ export default function AnalyticsPage() {
     return best.plates > 0 ? best : null;
   }, [hourly]);
 
-  const MEAL_COLORS = ['#facc15', '#6366f1'];
-  const PAY_COLORS = ['#22c55e', '#3b82f6'];
-
   const ranges: { key: Range; label: string }[] = [
     { key: 'today', label: 'Today' },
     { key: '7d', label: '7 Days' },
@@ -187,106 +188,17 @@ export default function AnalyticsPage() {
         />
       </div>
 
-      {/* Charts row */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <Card title="Revenue by Meal">
-          {mealPie.length === 0 ? (
-            <Empty />
-          ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie data={mealPie} dataKey="value" nameKey="name" outerRadius={80} label>
-                  {mealPie.map((_, i) => (
-                    <Cell key={i} fill={MEAL_COLORS[i % MEAL_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v: any) => `₹${v}`} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-
-        <Card title="Revenue by Payment Mode">
-          {paymentPie.length === 0 ? (
-            <Empty />
-          ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie data={paymentPie} dataKey="value" nameKey="name" outerRadius={80} label>
-                  {paymentPie.map((_, i) => (
-                    <Cell key={i} fill={PAY_COLORS[i % PAY_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v: any) => `₹${v}`} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-      </div>
-
-      {/* Hour-of-day */}
-      <div className="mb-6">
-        <Card
-          title={
-            peakHour
-              ? `Plates by Hour — peak at ${peakHour.hour
-                  .toString()
-                  .padStart(2, '0')}:00 (${peakHour.plates} plates)`
-              : 'Plates by Hour'
-          }
-        >
-          {hourlyChart.every((h) => h.plates === 0) ? (
-            <Empty />
-          ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <LineChart data={hourlyChart}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="hour" tick={{ fontSize: 11 }} interval={1} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="plates"
-                  stroke="#ea580c"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Plates"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="bills"
-                  stroke="#3b82f6"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Bills"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-      </div>
-
-      {/* Daily revenue */}
-      <Card title="Daily Revenue">
-        {daily.length === 0 ? (
-          <Empty />
-        ) : (
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={daily}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(v: any) => `₹${v}`} />
-              <Legend />
-              <Bar dataKey="revenue" fill="#ea580c" name="Revenue (₹)" />
-              <Bar dataKey="plates" fill="#3b82f6" name="Plates" />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </Card>
+      <Suspense
+        fallback={<div className="text-center text-sm text-gray-500 py-8">Loading charts…</div>}
+      >
+        <AnalyticsCharts
+          mealPie={mealPie}
+          paymentPie={paymentPie}
+          hourlyChart={hourlyChart}
+          daily={daily}
+          peakHour={peakHour}
+        />
+      </Suspense>
 
       {loading && <div className="mt-4 text-center text-sm text-gray-500">Loading…</div>}
     </div>
@@ -328,19 +240,3 @@ function Kpi({
   );
 }
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-      <h3 className="text-sm font-semibold text-gray-700 mb-3">{title}</h3>
-      {children}
-    </div>
-  );
-}
-
-function Empty() {
-  return (
-    <div className="h-[240px] flex items-center justify-center text-sm text-gray-400">
-      No data in this range.
-    </div>
-  );
-}

@@ -88,9 +88,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <span className="text-lg font-bold text-brand-700">Restaurant POS</span>
           <nav className="flex gap-1 ml-4">
             {tab('/', 'Billing')}
-            {(user?.role === 'manager' || user?.role === 'owner') && tab('/tools', 'Tools')}
-            {user?.role === 'owner' && tab('/analytics', 'Analytics')}
-            {user?.role === 'owner' && tab('/settings', 'Settings')}
+            {tab('/tools', 'Tools')}
+            {tab('/analytics', 'Analytics')}
+            {user?.role === 'admin' && tab('/settings', 'Settings')}
           </nav>
         </div>
 

@@ -23,6 +23,22 @@ type CashState = {
   } | null;
 };
 
+type UpdaterStatus = {
+  phase:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error';
+  version: string;
+  newVersion?: string;
+  progressPct?: number;
+  error?: string;
+  checkedAt?: string;
+};
+
 type RestoreResult =
   | { ok: false; error?: string; canceled?: boolean }
   | { ok: true; preview: true; parsed: number; toInsert: number; skipped: number }
@@ -44,6 +60,18 @@ export default function ToolsPage() {
       showFlash(r.ok ? '✓ Test page sent to printer' : `Printer test failed: ${r.error ?? 'unknown'}`);
     } finally {
       setPrinterTesting(false);
+    }
+  };
+
+  // Token PDF preview — render the slip layout to PDF without a printer.
+  const [previewing, setPreviewing] = useState(false);
+  const runTokenPreview = async () => {
+    setPreviewing(true);
+    try {
+      const r = await window.api.printer.previewPdf();
+      showFlash(r.ok ? `✓ Opened ${r.path}` : `Preview failed: ${r.error}`);
+    } finally {
+      setPreviewing(false);
     }
   };
 
@@ -120,6 +148,24 @@ export default function ToolsPage() {
     }
   };
 
+  // App updates
+  const [upd, setUpd] = useState<UpdaterStatus | null>(null);
+  const [updChecking, setUpdChecking] = useState(false);
+  useEffect(() => {
+    window.api.updates.status().then(setUpd);
+    const off = window.api.updates.onEvent(setUpd);
+    return off;
+  }, []);
+  const checkUpdates = async () => {
+    setUpdChecking(true);
+    try {
+      const r = await window.api.updates.check();
+      if (!r.ok) showFlash(r.error ?? 'Update check failed');
+    } finally {
+      setUpdChecking(false);
+    }
+  };
+
   // Audit log
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [auditFilter, setAuditFilter] = useState<string>('');
@@ -147,18 +193,87 @@ export default function ToolsPage() {
         </div>
 
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <h2 className="font-semibold text-gray-800 mb-3">App updates</h2>
+          <p className="text-sm text-gray-500 mb-3">
+            Current version: <span className="font-mono">{upd?.version ?? '—'}</span>
+            {upd?.newVersion && upd.newVersion !== upd.version && (
+              <>
+                {' · new: '}
+                <span className="font-mono font-semibold text-brand-700">{upd.newVersion}</span>
+              </>
+            )}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              disabled={updChecking || upd?.phase === 'checking' || upd?.phase === 'downloading'}
+              onClick={checkUpdates}
+              className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold disabled:opacity-50"
+            >
+              {upd?.phase === 'checking'
+                ? 'Checking…'
+                : upd?.phase === 'downloading'
+                ? `Downloading ${upd.progressPct ?? 0}%`
+                : 'Check for updates'}
+            </button>
+            {upd?.phase === 'downloaded' && (
+              <button
+                onClick={() => window.api.updates.install()}
+                className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-semibold"
+              >
+                Restart &amp; install
+              </button>
+            )}
+          </div>
+          {upd && (
+            <div className="mt-3 text-sm">
+              {upd.phase === 'not-available' && (
+                <div className="p-3 rounded bg-green-50 border border-green-200 text-green-800">
+                  ✓ You're on the latest version.
+                </div>
+              )}
+              {upd.phase === 'downloaded' && (
+                <div className="p-3 rounded bg-blue-50 border border-blue-200 text-blue-800">
+                  Update {upd.newVersion} downloaded. Click Restart &amp; install to apply now —
+                  your data is preserved.
+                </div>
+              )}
+              {upd.phase === 'error' && upd.error && (
+                <div className="p-3 rounded bg-red-50 border border-red-300 text-red-800">
+                  {upd.error}
+                </div>
+              )}
+            </div>
+          )}
+          <p className="text-xs text-gray-400 mt-3">
+            Bills, settings, and audit log are stored separately and survive every update.
+          </p>
+        </section>
+
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
           <h2 className="font-semibold text-gray-800 mb-3">Printer test</h2>
           <p className="text-sm text-gray-500 mb-3">
             Print a sample slip on the configured 80mm thermal printer. Use this after changing
             cables or driver settings.
           </p>
-          <button
-            disabled={printerTesting}
-            onClick={runPrinterTest}
-            className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold disabled:opacity-50"
-          >
-            {printerTesting ? 'Printing…' : 'Print test page'}
-          </button>
+          <div className="flex gap-2">
+            <button
+              disabled={printerTesting}
+              onClick={runPrinterTest}
+              className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold disabled:opacity-50"
+            >
+              {printerTesting ? 'Printing…' : 'Print test page'}
+            </button>
+            <button
+              disabled={previewing}
+              onClick={runTokenPreview}
+              className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-900 text-white text-sm font-semibold disabled:opacity-50"
+            >
+              {previewing ? 'Generating…' : 'Preview token (PDF)'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mt-2">
+            "Preview token (PDF)" renders a sample slip to PDF and opens it — no printer needed.
+          </p>
         </section>
 
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
