@@ -7,6 +7,7 @@ export default function SettingsPage() {
   const [restaurantName, setRestaurantName] = useState('');
   const [restaurantAddress, setRestaurantAddress] = useState('');
   const [restaurantMobile, setRestaurantMobile] = useState('');
+  const [restaurantInsta, setRestaurantInsta] = useState('');
   const [printerName, setPrinterName] = useState('');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseKey, setSupabaseKey] = useState('');
@@ -27,6 +28,7 @@ export default function SettingsPage() {
     setRestaurantName((await window.api.settings.get('restaurant_name')) ?? '');
     setRestaurantAddress((await window.api.settings.get('restaurant_address')) ?? '');
     setRestaurantMobile((await window.api.settings.get('restaurant_mobile')) ?? '');
+    setRestaurantInsta((await window.api.settings.get('restaurant_insta')) ?? '');
     setPrinterName((await window.api.settings.get('printer_name')) ?? '');
     setSupabaseUrl((await window.api.settings.get('supabase_url')) ?? '');
     setSupabaseKey((await window.api.settings.get('supabase_anon_key')) ?? '');
@@ -110,6 +112,7 @@ export default function SettingsPage() {
     await window.api.settings.set('restaurant_name', restaurantName.trim());
     await window.api.settings.set('restaurant_address', restaurantAddress.trim());
     await window.api.settings.set('restaurant_mobile', restaurantMobile.trim());
+    await window.api.settings.set('restaurant_insta', restaurantInsta.trim());
     await window.api.settings.set('printer_name', printerName.trim());
     await window.api.settings.set('supabase_url', trimmedUrl);
     await window.api.settings.set('supabase_anon_key', trimmedKey);
@@ -190,6 +193,14 @@ export default function SettingsPage() {
               onChange={(e) => setRestaurantMobile(e.target.value)}
               className="input"
               placeholder="9081810895"
+            />
+          </Field>
+          <Field label="Instagram handle (printed on customer copy, optional)">
+            <input
+              value={restaurantInsta}
+              onChange={(e) => setRestaurantInsta(e.target.value)}
+              className="input"
+              placeholder="jay_girr_kathiyawadi_"
             />
           </Field>
         </Section>

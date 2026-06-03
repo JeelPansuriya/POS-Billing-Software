@@ -15,6 +15,7 @@ type Bill = {
   restaurantName: string;
   restaurantAddress: string;
   restaurantMobile: string;
+  restaurantInsta: string;
 };
 
 function escapeHtml(s: string): string {
@@ -39,11 +40,12 @@ function customerSlipHtml(bill: Bill): string {
   const name = escapeHtml(bill.restaurantName);
   const addr = escapeHtml(bill.restaurantAddress);
   const mob = escapeHtml(bill.restaurantMobile);
+  const insta = escapeHtml(bill.restaurantInsta);
+  const addressLine = [addr, mob ? `Mob. ${mob}` : ''].filter(Boolean).join(' ');
   return `
 <div class="slip">
   <div class="full" style="font-weight:bold;text-align:center;font-size:17px;line-height:1.15;">${name}</div>
-  ${addr ? `<div class="full" style="text-align:center;font-size:10px;line-height:1.3;">${addr}</div>` : ''}
-  ${mob ? `<div class="full" style="text-align:center;font-size:10px;line-height:1.3;margin-bottom:2px;">Mob. ${mob}</div>` : ''}
+  ${addressLine ? `<div class="full" style="text-align:center;font-size:10px;line-height:1.3;margin-bottom:2px;">${addressLine}</div>` : ''}
   <div class="hr"></div>
   <table>
     <tr>
@@ -58,10 +60,10 @@ function customerSlipHtml(bill: Bill): string {
   <div class="hr"></div>
   <table>
     <thead><tr>
-      <th style="text-align:left;font-size:11px;width:40%;padding-right:12px;">No.Item</th>
+      <th style="text-align:left;font-size:11px;width:35%;">No.Item</th>
       <th style="text-align:right;font-size:11px;width:15%;padding-right:12px;">QTY</th>
-      <th style="text-align:right;font-size:11px;width:20%;padding-right:12px;">Price</th>
-      <th style="text-align:right;font-size:11px;width:25%;padding-right:16px;">Amount</th>
+      <th style="text-align:right;font-size:11px;width:22%;padding-right:12px;">Price</th>
+      <th style="text-align:right;font-size:11px;width:28%;padding-right:16px;">Amount</th>
     </tr></thead>
     <tbody><tr>
       <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">1 THALI</td>
@@ -81,6 +83,7 @@ function customerSlipHtml(bill: Bill): string {
   <div class="full" style="font-weight:bold;text-align:center;font-size:14px;padding:4px 0;">Grand Total Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}</div>
   <div class="hr"></div>
   <div class="full" style="text-align:center;font-size:10px;font-style:italic;line-height:1.3;">Thanks for coming... Visit again !!!</div>
+  ${insta ? `<div class="full" style="text-align:center;font-size:10px;line-height:1.3;">Insta: ${insta}</div>` : ''}
   <div class="cut"></div>
 </div>`;
 }
@@ -93,16 +96,23 @@ function managerSlipHtml(bill: Bill): string {
   <div class="full" style="font-weight:bold;text-align:center;font-size:15px;line-height:1.15;">${name}</div>
   <div class="full" style="text-align:center;font-size:11px;font-weight:bold;line-height:1.2;margin-bottom:2px;">--- MANAGER COPY ---</div>
   <div class="hr"></div>
-  <div class="full" style="text-align:left;font-size:14px;font-weight:bold;line-height:1.3;">Bill No&nbsp;&nbsp;&nbsp;: ${bill.tokenNo}</div>
-  <div class="full" style="text-align:left;font-size:11px;line-height:1.3;">Date : ${dateStr}&nbsp;&nbsp;Time : ${timeStr}</div>
-  <div class="full" style="text-align:left;font-size:11px;font-weight:bold;line-height:1.3;">Meal : ${bill.mealType.toUpperCase()}</div>
+  <table>
+    <tr>
+      <td style="text-align:left;font-size:11px;">Date: ${dateStr}</td>
+      <td style="text-align:right;font-size:13px;font-weight:bold;">Bill No.: ${bill.tokenNo}</td>
+    </tr>
+    <tr>
+      <td style="text-align:left;font-size:11px;">Time: ${timeStr}</td>
+      <td style="text-align:right;font-size:11px;font-weight:bold;">Meal: ${bill.mealType.toUpperCase()}</td>
+    </tr>
+  </table>
   <div class="hr"></div>
   <table>
     <thead><tr>
-      <th style="text-align:left;font-size:11px;width:15%;padding-right:12px;">SNo</th>
-      <th style="text-align:left;font-size:11px;width:40%;padding-right:12px;">Item</th>
+      <th style="text-align:left;font-size:11px;width:12%;padding-right:12px;">SNo</th>
+      <th style="text-align:left;font-size:11px;width:38%;padding-right:12px;">Item</th>
       <th style="text-align:right;font-size:11px;width:20%;padding-right:12px;">QTY</th>
-      <th style="text-align:right;font-size:11px;width:25%;padding-right:16px;">Amount</th>
+      <th style="text-align:right;font-size:11px;width:30%;padding-right:16px;">Amount</th>
     </tr></thead>
     <tbody><tr>
       <td style="text-align:left;font-size:12px;padding-right:12px;">1</td>
@@ -123,13 +133,13 @@ function buildTokenHtml(bill: Bill): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><style>
 @page { size: 80mm auto; margin: 0; }
-html, body { margin: 0; padding: 6px 16px; font-family: Arial, sans-serif; color: #000; }
-.full { width: 100%; display: block; }
+html, body { margin: 0; padding: 6px 0 6px 8px; font-family: "Consolas", "Courier New", "Lucida Console", monospace; color: #000; }
+.full { width: calc(100% - 4mm); display: block; }
 .slip { page-break-after: always; }
 .slip:last-child { page-break-after: auto; }
-.hr { border-top: 1px solid #000; margin: 4px 12px 4px 0; height: 0; }
-.cut { border-top: 1px dashed #000; margin: 6px 28px 0 0; height: 0; }
-table { width: 100%; border-collapse: collapse; }
+.hr { border-top: 1px solid #000; margin: 4px 6mm 4px 0; height: 0; }
+.cut { border-top: 1px dashed #000; margin: 6px 2mm 0 0; height: 0; }
+table { width: calc(100% - 4mm); border-collapse: collapse; }
 td, th { padding: 2px 0; }
 </style></head><body>
 ${customerSlipHtml(bill)}
@@ -146,6 +156,7 @@ function loadSettings() {
     name: get('restaurant_name') || 'Jay Girr Kathiyawadi',
     address: get('restaurant_address'),
     mobile: get('restaurant_mobile'),
+    insta: get('restaurant_insta'),
   };
 }
 
@@ -163,6 +174,7 @@ function loadSampleBill(): Bill {
     restaurantName: s.name,
     restaurantAddress: s.address,
     restaurantMobile: s.mobile,
+    restaurantInsta: s.insta,
   };
 }
 
@@ -198,6 +210,7 @@ function loadRealBill(billId: string): Bill | null {
     restaurantName: s.name,
     restaurantAddress: s.address,
     restaurantMobile: s.mobile,
+    restaurantInsta: s.insta,
   };
 }
 

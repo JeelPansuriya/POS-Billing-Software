@@ -9,6 +9,7 @@ const SYNCED_KEYS = [
   'restaurant_name',
   'restaurant_address',
   'restaurant_mobile',
+  'restaurant_insta',
   'backup_schedule',
   'price_lunch',
   'price_dinner',

@@ -458,11 +458,16 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     // dayIso is the ISO date prefix YYYY-MM-DD (local) — defaults to today.
     const day = dayIso ?? localISODate();
 
+    // localtime + voided_at filter mirrors day:print so the on-screen summary
+    // and the printed slip always agree. Without 'localtime' the date filter
+    // ran in UTC and rolled the day boundary 5h30m early in IST.
     const totals = getDb()
       .prepare(
         `SELECT COUNT(*) as bills, COALESCE(SUM(plates), 0) as plates, COALESCE(SUM(total), 0) as revenue,
                 MIN(token_no) as first_token, MAX(token_no) as last_token
-         FROM bills WHERE date(created_at) = ?`
+         FROM bills
+          WHERE date(created_at, 'localtime') = ?
+            AND voided_at IS NULL`
       )
       .get(day) as {
       bills: number;
@@ -475,14 +480,20 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     const meals = getDb()
       .prepare(
         `SELECT meal_type, COALESCE(SUM(plates),0) as plates, COALESCE(SUM(total),0) as revenue
-         FROM bills WHERE date(created_at) = ? GROUP BY meal_type`
+         FROM bills
+          WHERE date(created_at, 'localtime') = ?
+            AND voided_at IS NULL
+          GROUP BY meal_type`
       )
       .all(day) as Array<{ meal_type: 'lunch' | 'dinner'; plates: number; revenue: number }>;
 
     const pays = getDb()
       .prepare(
         `SELECT payment_mode, COALESCE(SUM(total),0) as revenue
-         FROM bills WHERE date(created_at) = ? GROUP BY payment_mode`
+         FROM bills
+          WHERE date(created_at, 'localtime') = ?
+            AND voided_at IS NULL
+          GROUP BY payment_mode`
       )
       .all(day) as Array<{ payment_mode: 'cash' | 'upi'; revenue: number }>;
 

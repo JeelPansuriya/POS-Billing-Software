@@ -186,6 +186,7 @@ export function initDb() {
     '105, Sky Tatva, opp. Amba Ashram, College Road, Nadiad-387001'
   );
   seedSetting('restaurant_mobile', '9081810895');
+  seedSetting('restaurant_insta', 'jay_girr_kathiyawadi_');
   // One-time rename for installs that still hold the original default. Custom
   // values set via Settings are left untouched.
   db.prepare(

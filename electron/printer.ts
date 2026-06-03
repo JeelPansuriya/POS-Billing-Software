@@ -13,13 +13,40 @@ type Bill = {
   restaurantName: string;
 };
 
-const fullWidth = { width: '100%', display: 'block', margin: '0', padding: '0' } as const;
+// Thermal printers (8 dots/mm) struggle with anti-aliased proportional fonts —
+// thin strokes blur, numbers misalign. Monospace bitmap-style fonts render as
+// hard-edged dot patterns that the printhead can reproduce cleanly. Consolas
+// ships with Windows and has true bold; Courier New is a universal fallback.
+const PRINT_FONT =
+  '"Consolas", "Courier New", "Lucida Console", monospace';
+
+// `calc(100% - 4mm)` bakes a right-side buffer into every full-width element.
+// The H80i / POS80 driver ignores page-level right margins on this hardware,
+// so the only reliable way to keep right-aligned amounts off the paper edge
+// is to make the content itself narrower than the paper.
+const fullWidth = {
+  width: 'calc(100% - 4mm)',
+  display: 'block',
+  margin: '0',
+  padding: '0',
+  fontFamily: PRINT_FONT,
+} as const;
+
+// Same trick for tables, which don't spread `fullWidth`. Cells still get their
+// own per-cell padding-right for inter-column gaps. Children inherit fontFamily.
+const tableStyle = {
+  width: 'calc(100% - 4mm)',
+  borderCollapse: 'collapse' as const,
+  margin: '0',
+  padding: '0',
+  fontFamily: PRINT_FONT,
+};
 
 // Non-breaking space character — survives the renderer's whitespace collapse.
 const NBSP = ' ';
 
-// Solid horizontal rule that hugs the paper width. Bottom margin negative-trick
-// not needed — borderTop on a zero-height div renders as a thin line.
+// Solid row dividers stay shorter than the bottom cut-line so the dashed
+// tear guide is the most prominent horizontal line on the slip.
 const hr = (): PosPrintData => ({
   type: 'text',
   value: '&nbsp;',
@@ -32,7 +59,7 @@ const hr = (): PosPrintData => ({
     width: 'auto',
     marginTop: '4px',
     marginBottom: '4px',
-    marginRight: '12px',
+    marginRight: '6mm',
   },
 });
 
@@ -47,7 +74,7 @@ const cutLine = (): PosPrintData => ({
     height: '0',
     width: 'auto',
     marginTop: '6px',
-    marginRight: '28px',
+    marginRight: '2mm',
   },
 });
 
@@ -70,6 +97,7 @@ function getRestaurantHeader() {
   return {
     address: get('restaurant_address'),
     mobile: get('restaurant_mobile'),
+    insta: get('restaurant_insta'),
   };
 }
 
@@ -78,11 +106,11 @@ function getRestaurantHeader() {
 // can use it as proof of purchase.
 function buildCustomerSlip(bill: Bill): PosPrintData[] {
   const { dateStr, timeStr } = fmtBillTimes(bill.createdAt);
-  const { address, mobile } = getRestaurantHeader();
+  const { address, mobile, insta } = getRestaurantHeader();
   const data: PosPrintData[] = [
     {
       type: 'text',
-      value: `${bill.restaurantName}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: bill.restaurantName,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -92,22 +120,16 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
       },
     },
   ];
-  if (address) {
+  // Address + mobile rendered as one wrapping block so the phone number runs
+  // straight after the address instead of dropping to its own line. Centered
+  // text with trailing NBSPs would shift visually left, so we keep it clean.
+  const addressLine = [address, mobile ? `Mob. ${mobile}` : '']
+    .filter(Boolean)
+    .join(' ');
+  if (addressLine) {
     data.push({
       type: 'text',
-      value: `${address}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
-      style: {
-        ...fullWidth,
-        textAlign: 'center',
-        fontSize: '10px',
-        lineHeight: '1.3',
-      },
-    });
-  }
-  if (mobile) {
-    data.push({
-      type: 'text',
-      value: `Mob. ${mobile}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: addressLine,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -121,7 +143,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'table',
-      style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
+      style: tableStyle,
       tableHeader: [],
       tableBody: [
         [
@@ -160,12 +182,12 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'table',
-      style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
+      style: tableStyle,
       tableHeader: [
         {
           type: 'text',
           value: 'No.Item',
-          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '40%' },
+          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '35%' },
         },
         {
           type: 'text',
@@ -185,7 +207,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
             textAlign: 'right',
             fontSize: '11px',
             fontWeight: 'bold',
-            width: '20%',
+            width: '22%',
             paddingRight: '12px',
           },
         },
@@ -196,7 +218,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
             textAlign: 'right',
             fontSize: '11px',
             fontWeight: 'bold',
-            width: '25%',
+            width: '28%',
             paddingRight: '16px',
           },
         },
@@ -205,7 +227,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
         [
           {
             type: 'text',
-            value: '1 THALI',
+            value: '1. THALI',
             style: {
               textAlign: 'left',
               fontSize: '12px',
@@ -228,13 +250,14 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
             value: `${bill.pricePerPlate}.00`,
             style: {
               textAlign: 'right',
+              fontWeight: 'bold',
               fontSize: '11px',
               padding: '2px 12px 2px 0',
             },
           },
           {
             type: 'text',
-            value: `${bill.total}.00${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+            value: `${bill.total}.00`,
             style: {
               textAlign: 'right',
               fontSize: '12px',
@@ -249,7 +272,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'table',
-      style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
+      style: tableStyle,
       tableHeader: [],
       tableBody: [
         [
@@ -260,7 +283,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
           },
           {
             type: 'text',
-            value: `Sub Total ${bill.total}.00${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+            value: `Sub Total ${bill.total}.00`,
             style: {
               textAlign: 'right',
               fontSize: '11px',
@@ -276,7 +299,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'text',
-      value: `Grand Total Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: `Grand Total Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -288,7 +311,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'text',
-      value: `Thanks for coming... Visit again !!!${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: `Thanks for coming... Visit again !!!`,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -296,9 +319,21 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
         fontStyle: 'italic',
         lineHeight: '1.3',
       },
-    },
-    cutLine()
+    }
   );
+  if (insta) {
+    data.push({
+      type: 'text',
+      value: `Instagram: ${insta}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'center',
+        fontSize: '10px',
+        lineHeight: '1.3',
+      },
+    });
+  }
+  data.push(cutLine());
   return data;
 }
 
@@ -310,7 +345,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
   return [
     {
       type: 'text',
-      value: `${bill.restaurantName}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: bill.restaurantName,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -321,7 +356,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     },
     {
       type: 'text',
-      value: `--- MANAGER COPY ---${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: '--- MANAGER COPY ---',
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -333,41 +368,47 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     },
     hr(),
     {
-      type: 'text',
-      value: `Bill No   : ${bill.tokenNo}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
-      style: {
-        ...fullWidth,
-        textAlign: 'left',
-        fontSize: '14px',
-        fontWeight: 'bold',
-        lineHeight: '1.3',
-      },
-    },
-    {
-      type: 'text',
-      value: `Date : ${dateStr}  Time : ${timeStr}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
-      style: {
-        ...fullWidth,
-        textAlign: 'left',
-        fontSize: '11px',
-        lineHeight: '1.3',
-      },
-    },
-    {
-      type: 'text',
-      value: `Meal : ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
-      style: {
-        ...fullWidth,
-        textAlign: 'left',
-        fontSize: '11px',
-        fontWeight: 'bold',
-        lineHeight: '1.3',
-      },
+      type: 'table',
+      style: tableStyle,
+      tableHeader: [],
+      tableBody: [
+        [
+          {
+            type: 'text',
+            value: `Date: ${dateStr}`,
+            style: { textAlign: 'left', fontSize: '11px', padding: '0', margin: '0' },
+          },
+          {
+            type: 'text',
+            value: `Bill No.: ${bill.tokenNo}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+            style: {
+              textAlign: 'right',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              padding: '0',
+              margin: '0',
+            },
+          },
+        ],
+        [
+          {
+            type: 'text',
+            value: `Time: ${timeStr}`,
+            style: { textAlign: 'left', fontSize: '11px', padding: '0', margin: '0' },
+          },
+          {
+            type: 'text',
+            value: `Meal: ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+            style: { textAlign: 'right', fontSize: '11px', padding: '0', margin: '0' },
+          },
+        ],
+      ],
+      tableFooter: [],
     },
     hr(),
     {
       type: 'table',
-      style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
+      style: tableStyle,
       tableHeader: [
         {
           type: 'text',
@@ -376,7 +417,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
             textAlign: 'left',
             fontSize: '11px',
             fontWeight: 'bold',
-            width: '15%',
+            width: '12%',
             paddingRight: '12px',
           },
         },
@@ -387,7 +428,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
             textAlign: 'left',
             fontSize: '11px',
             fontWeight: 'bold',
-            width: '40%',
+            width: '38%',
             paddingRight: '12px',
           },
         },
@@ -409,7 +450,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
             textAlign: 'right',
             fontSize: '11px',
             fontWeight: 'bold',
-            width: '25%',
+            width: '30%',
             paddingRight: '16px',
           },
         },
@@ -443,7 +484,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
           },
           {
             type: 'text',
-            value: `${bill.total}.00${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+            value: `${bill.total}.00`,
             style: {
               textAlign: 'right',
               fontSize: '12px',
@@ -458,7 +499,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'text',
-      value: `TOTAL Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: `TOTAL Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -468,18 +509,18 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
       },
     },
     hr(),
-    {
-      type: 'text',
-      value: `Verified by: __________________${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
-      style: {
-        ...fullWidth,
-        textAlign: 'left',
-        fontSize: '11px',
-        lineHeight: '1.4',
-        marginTop: '4px',
-      },
-    },
-    cutLine(),
+    // {
+    //   type: 'text',
+    //   value: `Verified by: __________________${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+    //   style: {
+    //     ...fullWidth,
+    //     textAlign: 'left',
+    //     fontSize: '11px',
+    //     lineHeight: '1.4',
+    //     marginTop: '4px',
+    //   },
+    // },
+    // cutLine(),
   ];
 }
 
@@ -493,7 +534,7 @@ export async function printToken(bill: Bill) {
     preview: false,
     // Right page margin keeps the H80i / POS80 from clipping right-aligned
     // amounts. Bottom feed is still driver-controlled (per project memory).
-    margin: '0 4mm 0 4mm',
+    margin: '0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
@@ -531,7 +572,7 @@ export async function printTest() {
   const data: PosPrintData[] = [
     {
       type: 'text',
-      value: `${restaurantName}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: restaurantName,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -542,7 +583,7 @@ export async function printTest() {
     },
     {
       type: 'text',
-      value: `PRINTER TEST${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: 'PRINTER TEST',
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -553,7 +594,7 @@ export async function printTest() {
     },
     {
       type: 'text',
-      value: `${stamp}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: stamp,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -564,7 +605,7 @@ export async function printTest() {
     },
     {
       type: 'text',
-      value: `THALI x 1${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: 'THALI x 1',
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -577,7 +618,7 @@ export async function printTest() {
     },
     {
       type: 'text',
-      value: `If you can read this, the printer is OK.${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: 'If you can read this, the printer is OK.',
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -591,7 +632,7 @@ export async function printTest() {
     preview: false,
     // Right page margin keeps the H80i / POS80 from clipping right-aligned
     // amounts. Bottom feed is still driver-controlled (per project memory).
-    margin: '0 4mm 0 4mm',
+    margin: '0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
@@ -656,7 +697,7 @@ export async function printDaySummary(s: DaySummary) {
   const data: PosPrintData[] = [
     {
       type: 'text',
-      value: `${s.restaurantName}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: s.restaurantName,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -667,7 +708,7 @@ export async function printDaySummary(s: DaySummary) {
     },
     {
       type: 'text',
-      value: `DAY SUMMARY${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: 'DAY SUMMARY',
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -678,7 +719,7 @@ export async function printDaySummary(s: DaySummary) {
     },
     {
       type: 'text',
-      value: `${s.dayLabel}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: s.dayLabel,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -716,7 +757,7 @@ export async function printDaySummary(s: DaySummary) {
     },
     {
       type: 'text',
-      value: `TOTAL Rs.${s.totalRevenue}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
+      value: `TOTAL Rs.${s.totalRevenue}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -740,7 +781,7 @@ export async function printDaySummary(s: DaySummary) {
 
   const options: PosPrintOptions = {
     preview: false,
-    margin: '0 4mm 30px 4mm',
+    margin: '0 0 30px 0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
