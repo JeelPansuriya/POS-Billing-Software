@@ -82,7 +82,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
   const data: PosPrintData[] = [
     {
       type: 'text',
-      value: `${bill.restaurantName}${NBSP}${NBSP}${NBSP}`,
+      value: `${bill.restaurantName}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -95,7 +95,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
   if (address) {
     data.push({
       type: 'text',
-      value: `${address}${NBSP}${NBSP}${NBSP}`,
+      value: `${address}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -107,7 +107,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
   if (mobile) {
     data.push({
       type: 'text',
-      value: `Mob. ${mobile}${NBSP}${NBSP}${NBSP}`,
+      value: `Mob. ${mobile}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -132,7 +132,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
           },
           {
             type: 'text',
-            value: `Bill No.: ${bill.tokenNo}${NBSP}${NBSP}${NBSP}`,
+            value: `Bill No.: ${bill.tokenNo}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
             style: {
               textAlign: 'right',
               fontSize: '12px',
@@ -150,7 +150,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
           },
           {
             type: 'text',
-            value: `Meal: ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+            value: `Meal: ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
             style: { textAlign: 'right', fontSize: '11px', padding: '0', margin: '0' },
           },
         ],
@@ -185,7 +185,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
             fontSize: '11px',
             fontWeight: 'bold',
             width: '25%',
-            paddingRight: '8px',
+            paddingRight: '16px',
           },
         },
       ],
@@ -208,12 +208,12 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
           },
           {
             type: 'text',
-            value: `${bill.total}.00${NBSP}${NBSP}`,
+            value: `${bill.total}.00${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
             style: {
               textAlign: 'right',
               fontSize: '12px',
               fontWeight: 'bold',
-              padding: '2px 0',
+              padding: '2px 16px 2px 0',
             },
           },
         ],
@@ -234,12 +234,12 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
           },
           {
             type: 'text',
-            value: `Sub Total ${bill.total}.00${NBSP}${NBSP}`,
+            value: `Sub Total ${bill.total}.00${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
             style: {
               textAlign: 'right',
               fontSize: '11px',
               fontWeight: 'bold',
-              padding: '0',
+              padding: '0 16px 0 0',
               margin: '0',
             },
           },
@@ -250,7 +250,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'text',
-      value: `Grand Total Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+      value: `Grand Total Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -262,7 +262,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'text',
-      value: `Thanks for coming... Visit again !!!${NBSP}${NBSP}${NBSP}`,
+      value: `Thanks for coming... Visit again !!!${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -284,7 +284,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
   return [
     {
       type: 'text',
-      value: `${bill.restaurantName}${NBSP}${NBSP}${NBSP}`,
+      value: `${bill.restaurantName}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -295,7 +295,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     },
     {
       type: 'text',
-      value: `--- MANAGER COPY ---${NBSP}${NBSP}${NBSP}`,
+      value: `--- MANAGER COPY ---${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -308,7 +308,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'text',
-      value: `Bill No   : ${bill.tokenNo}${NBSP}${NBSP}${NBSP}`,
+      value: `Bill No   : ${bill.tokenNo}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'left',
@@ -319,7 +319,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     },
     {
       type: 'text',
-      value: `Date : ${dateStr}  Time : ${timeStr}${NBSP}${NBSP}${NBSP}`,
+      value: `Date : ${dateStr}  Time : ${timeStr}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'left',
@@ -329,7 +329,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     },
     {
       type: 'text',
-      value: `Meal : ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+      value: `Meal : ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'left',
@@ -366,7 +366,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
             fontSize: '11px',
             fontWeight: 'bold',
             width: '25%',
-            paddingRight: '8px',
+            paddingRight: '16px',
           },
         },
       ],
@@ -389,12 +389,12 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
           },
           {
             type: 'text',
-            value: `${bill.total}.00${NBSP}${NBSP}`,
+            value: `${bill.total}.00${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
             style: {
               textAlign: 'right',
               fontSize: '12px',
               fontWeight: 'bold',
-              padding: '2px 0',
+              padding: '2px 16px 2px 0',
             },
           },
         ],
@@ -404,7 +404,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'text',
-      value: `TOTAL Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+      value: `TOTAL Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -416,7 +416,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
     hr(),
     {
       type: 'text',
-      value: `Verified by: __________________${NBSP}${NBSP}${NBSP}`,
+      value: `Verified by: __________________${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'left',
@@ -437,7 +437,9 @@ export async function printToken(bill: Bill) {
 
   const options: PosPrintOptions = {
     preview: false,
-    margin: '0',
+    // Right page margin keeps the H80i / POS80 from clipping right-aligned
+    // amounts. Bottom feed is still driver-controlled (per project memory).
+    margin: '0 4mm 0 0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
@@ -475,7 +477,7 @@ export async function printTest() {
   const data: PosPrintData[] = [
     {
       type: 'text',
-      value: `${restaurantName}${NBSP}${NBSP}${NBSP}`,
+      value: `${restaurantName}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -486,7 +488,7 @@ export async function printTest() {
     },
     {
       type: 'text',
-      value: `PRINTER TEST${NBSP}${NBSP}${NBSP}`,
+      value: `PRINTER TEST${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -497,7 +499,7 @@ export async function printTest() {
     },
     {
       type: 'text',
-      value: `${stamp}${NBSP}${NBSP}${NBSP}`,
+      value: `${stamp}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -508,7 +510,7 @@ export async function printTest() {
     },
     {
       type: 'text',
-      value: `THALI x 1${NBSP}${NBSP}${NBSP}`,
+      value: `THALI x 1${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -521,7 +523,7 @@ export async function printTest() {
     },
     {
       type: 'text',
-      value: `If you can read this, the printer is OK.${NBSP}${NBSP}${NBSP}`,
+      value: `If you can read this, the printer is OK.${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -533,7 +535,9 @@ export async function printTest() {
 
   const options: PosPrintOptions = {
     preview: false,
-    margin: '0',
+    // Right page margin keeps the H80i / POS80 from clipping right-aligned
+    // amounts. Bottom feed is still driver-controlled (per project memory).
+    margin: '0 4mm 0 0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
@@ -581,7 +585,7 @@ export async function printDaySummary(s: DaySummary) {
         },
         {
           type: 'text' as const,
-          value: `${value}${NBSP}${NBSP}${NBSP}`,
+          value: `${value}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
           style: {
             textAlign: 'right',
             fontWeight: 'bold',
@@ -598,7 +602,7 @@ export async function printDaySummary(s: DaySummary) {
   const data: PosPrintData[] = [
     {
       type: 'text',
-      value: `${s.restaurantName}${NBSP}${NBSP}${NBSP}`,
+      value: `${s.restaurantName}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -609,7 +613,7 @@ export async function printDaySummary(s: DaySummary) {
     },
     {
       type: 'text',
-      value: `DAY SUMMARY${NBSP}${NBSP}${NBSP}`,
+      value: `DAY SUMMARY${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -620,7 +624,7 @@ export async function printDaySummary(s: DaySummary) {
     },
     {
       type: 'text',
-      value: `${s.dayLabel}${NBSP}${NBSP}${NBSP}`,
+      value: `${s.dayLabel}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'center',
@@ -658,7 +662,7 @@ export async function printDaySummary(s: DaySummary) {
     },
     {
       type: 'text',
-      value: `TOTAL Rs.${s.totalRevenue}${NBSP}${NBSP}${NBSP}`,
+      value: `TOTAL Rs.${s.totalRevenue}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         fontWeight: 'bold',
@@ -682,7 +686,7 @@ export async function printDaySummary(s: DaySummary) {
 
   const options: PosPrintOptions = {
     preview: false,
-    margin: '0 0 30px 0',
+    margin: '0 4mm 30px 0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,

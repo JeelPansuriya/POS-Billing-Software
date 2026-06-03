@@ -123,7 +123,7 @@ function buildTokenHtml(bill: Bill): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><style>
 @page { size: 80mm auto; margin: 0; }
-html, body { margin: 0; padding: 6px 8px; font-family: Arial, sans-serif; color: #000; }
+html, body { margin: 0; padding: 6px 16px 6px 8px; font-family: Arial, sans-serif; color: #000; }
 .full { width: 100%; display: block; }
 .slip { page-break-after: always; }
 .slip:last-child { page-break-after: auto; }
