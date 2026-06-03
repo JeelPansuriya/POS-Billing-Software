@@ -18,36 +18,67 @@ const fullWidth = { width: '100%', display: 'block', margin: '0', padding: '0' }
 // Non-breaking space character — survives the renderer's whitespace collapse.
 const NBSP = ' ';
 
-export async function printToken(bill: Bill) {
-  const printerName =
-    (getDb().prepare("SELECT value FROM settings WHERE key='printer_name'").get() as
-      | { value: string }
-      | undefined)?.value ?? '';
+// Solid horizontal rule that hugs the paper width. Bottom margin negative-trick
+// not needed — borderTop on a zero-height div renders as a thin line.
+const hr = (): PosPrintData => ({
+  type: 'text',
+  value: '&nbsp;',
+  style: {
+    ...fullWidth,
+    borderTop: '1px solid #000',
+    fontSize: '0',
+    lineHeight: '0',
+    height: '0',
+    width: 'auto',
+    marginTop: '4px',
+    marginBottom: '4px',
+    marginRight: '12px',
+  },
+});
 
-  const date = new Date(bill.createdAt);
+const cutLine = (): PosPrintData => ({
+  type: 'text',
+  value: '&nbsp;',
+  style: {
+    ...fullWidth,
+    borderTop: '1px dashed #000',
+    fontSize: '0',
+    lineHeight: '0',
+    height: '0',
+    width: 'auto',
+    marginTop: '6px',
+    marginRight: '28px',
+  },
+});
+
+function fmtBillTimes(createdAt: string) {
+  const date = new Date(createdAt);
   const dd = String(date.getDate()).padStart(2, '0');
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const yyyy = String(date.getFullYear());
   const hh = String(date.getHours()).padStart(2, '0');
   const mi = String(date.getMinutes()).padStart(2, '0');
   const ss = String(date.getSeconds()).padStart(2, '0');
-  const dateStr = `${dd}-${mm}-${yyyy}`;
-  const timeStr = `${hh}:${mi}:${ss}`;
+  return { dateStr: `${dd}-${mm}-${yyyy}`, timeStr: `${hh}:${mi}:${ss}` };
+}
 
-  const SEP = '================================';
-  const sep = (): PosPrintData => ({
-    type: 'text',
-    value: SEP,
-    style: {
-      ...fullWidth,
-      textAlign: 'center',
-      fontSize: '10px',
-      lineHeight: '1',
-      margin: '2px 0',
-      letterSpacing: '-1px',
-    },
-  });
+function getRestaurantHeader() {
+  const get = (k: string) =>
+    (getDb().prepare('SELECT value FROM settings WHERE key=?').get(k) as
+      | { value: string }
+      | undefined)?.value ?? '';
+  return {
+    address: get('restaurant_address'),
+    mobile: get('restaurant_mobile'),
+  };
+}
 
+// Customer copy — full restaurant header (name, address, mobile) and a
+// thank-you footer. Mirrors a typical retail receipt layout so the customer
+// can use it as proof of purchase.
+function buildCustomerSlip(bill: Bill): PosPrintData[] {
+  const { dateStr, timeStr } = fmtBillTimes(bill.createdAt);
+  const { address, mobile } = getRestaurantHeader();
   const data: PosPrintData[] = [
     {
       type: 'text',
@@ -56,26 +87,239 @@ export async function printToken(bill: Bill) {
         ...fullWidth,
         fontWeight: 'bold',
         textAlign: 'center',
-        fontSize: '20px',
-        lineHeight: '1.1',
-        marginBottom: '4px',
+        fontSize: '17px',
+        lineHeight: '1.15',
       },
     },
-    sep(),
+  ];
+  if (address) {
+    data.push({
+      type: 'text',
+      value: `${address}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'center',
+        fontSize: '10px',
+        lineHeight: '1.3',
+      },
+    });
+  }
+  if (mobile) {
+    data.push({
+      type: 'text',
+      value: `Mob. ${mobile}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'center',
+        fontSize: '10px',
+        lineHeight: '1.3',
+        marginBottom: '2px',
+      },
+    });
+  }
+  data.push(
+    hr(),
+    {
+      type: 'table',
+      style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
+      tableHeader: [],
+      tableBody: [
+        [
+          {
+            type: 'text',
+            value: `Date: ${dateStr}`,
+            style: { textAlign: 'left', fontSize: '11px', padding: '0', margin: '0' },
+          },
+          {
+            type: 'text',
+            value: `Bill No.: ${bill.tokenNo}${NBSP}${NBSP}${NBSP}`,
+            style: {
+              textAlign: 'right',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              padding: '0',
+              margin: '0',
+            },
+          },
+        ],
+        [
+          {
+            type: 'text',
+            value: `Time: ${timeStr}`,
+            style: { textAlign: 'left', fontSize: '11px', padding: '0', margin: '0' },
+          },
+          {
+            type: 'text',
+            value: `Meal: ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+            style: { textAlign: 'right', fontSize: '11px', padding: '0', margin: '0' },
+          },
+        ],
+      ],
+      tableFooter: [],
+    },
+    hr(),
+    {
+      type: 'table',
+      style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
+      tableHeader: [
+        {
+          type: 'text',
+          value: 'No.Item',
+          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '40%' },
+        },
+        {
+          type: 'text',
+          value: 'QTY',
+          style: { textAlign: 'right', fontSize: '11px', fontWeight: 'bold', width: '15%' },
+        },
+        {
+          type: 'text',
+          value: 'Price',
+          style: { textAlign: 'right', fontSize: '11px', fontWeight: 'bold', width: '20%' },
+        },
+        {
+          type: 'text',
+          value: 'Amount',
+          style: {
+            textAlign: 'right',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            width: '25%',
+            paddingRight: '8px',
+          },
+        },
+      ],
+      tableBody: [
+        [
+          {
+            type: 'text',
+            value: '1 THALI',
+            style: { textAlign: 'left', fontSize: '12px', fontWeight: 'bold', padding: '2px 0' },
+          },
+          {
+            type: 'text',
+            value: `${bill.plates}`,
+            style: { textAlign: 'right', fontSize: '14px', fontWeight: 'bold', padding: '2px 0' },
+          },
+          {
+            type: 'text',
+            value: `${bill.pricePerPlate}.00`,
+            style: { textAlign: 'right', fontSize: '11px', padding: '2px 0' },
+          },
+          {
+            type: 'text',
+            value: `${bill.total}.00${NBSP}${NBSP}`,
+            style: {
+              textAlign: 'right',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              padding: '2px 0',
+            },
+          },
+        ],
+      ],
+      tableFooter: [],
+    },
+    hr(),
+    {
+      type: 'table',
+      style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
+      tableHeader: [],
+      tableBody: [
+        [
+          {
+            type: 'text',
+            value: `Total Qty: ${bill.plates}`,
+            style: { textAlign: 'left', fontSize: '11px', padding: '0', margin: '0' },
+          },
+          {
+            type: 'text',
+            value: `Sub Total ${bill.total}.00${NBSP}${NBSP}`,
+            style: {
+              textAlign: 'right',
+              fontSize: '11px',
+              fontWeight: 'bold',
+              padding: '0',
+              margin: '0',
+            },
+          },
+        ],
+      ],
+      tableFooter: [],
+    },
+    hr(),
+    {
+      type: 'text',
+      value: `Grand Total Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        fontWeight: 'bold',
+        textAlign: 'center',
+        fontSize: '14px',
+        padding: '4px 0',
+      },
+    },
+    hr(),
+    {
+      type: 'text',
+      value: `Thanks for coming... Visit again !!!${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'center',
+        fontSize: '10px',
+        fontStyle: 'italic',
+        lineHeight: '1.3',
+      },
+    },
+    cutLine()
+  );
+  return data;
+}
+
+// Manager copy — minimal, kept by the cashier for end-of-day reconciliation.
+// No address, no thanks footer; instead carries a "Verified" line so the
+// owner can tick each slip while counting.
+function buildManagerSlip(bill: Bill): PosPrintData[] {
+  const { dateStr, timeStr } = fmtBillTimes(bill.createdAt);
+  return [
+    {
+      type: 'text',
+      value: `${bill.restaurantName}${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        fontWeight: 'bold',
+        textAlign: 'center',
+        fontSize: '15px',
+        lineHeight: '1.15',
+      },
+    },
+    {
+      type: 'text',
+      value: `--- MANAGER COPY ---${NBSP}${NBSP}${NBSP}`,
+      style: {
+        ...fullWidth,
+        textAlign: 'center',
+        fontSize: '11px',
+        fontWeight: 'bold',
+        lineHeight: '1.2',
+        marginBottom: '2px',
+      },
+    },
+    hr(),
     {
       type: 'text',
       value: `Bill No   : ${bill.tokenNo}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'left',
-        fontSize: '16px',
+        fontSize: '14px',
         fontWeight: 'bold',
         lineHeight: '1.3',
       },
     },
     {
       type: 'text',
-      value: `Date : ${dateStr} | Time : ${timeStr}${NBSP}${NBSP}${NBSP}`,
+      value: `Date : ${dateStr}  Time : ${timeStr}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'left',
@@ -85,16 +329,16 @@ export async function printToken(bill: Bill) {
     },
     {
       type: 'text',
-      value: `Meal      : ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
+      value: `Meal : ${bill.mealType.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
         textAlign: 'left',
-        fontSize: '13px',
+        fontSize: '11px',
         fontWeight: 'bold',
         lineHeight: '1.3',
       },
     },
-    sep(),
+    hr(),
     {
       type: 'table',
       style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
@@ -106,18 +350,23 @@ export async function printToken(bill: Bill) {
         },
         {
           type: 'text',
-          value: 'NAME',
-          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '55%' },
+          value: 'Item',
+          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '40%' },
         },
         {
           type: 'text',
           value: 'QTY',
+          style: { textAlign: 'right', fontSize: '11px', fontWeight: 'bold', width: '20%' },
+        },
+        {
+          type: 'text',
+          value: 'Amount',
           style: {
             textAlign: 'right',
             fontSize: '11px',
             fontWeight: 'bold',
-            width: '30%',
-            paddingRight: '12px',
+            width: '25%',
+            paddingRight: '8px',
           },
         },
       ],
@@ -131,19 +380,19 @@ export async function printToken(bill: Bill) {
           {
             type: 'text',
             value: 'THALI',
-            style: {
-              textAlign: 'left',
-              fontSize: '13px',
-              fontWeight: 'bold',
-              padding: '2px 0',
-            },
+            style: { textAlign: 'left', fontSize: '12px', fontWeight: 'bold', padding: '2px 0' },
           },
           {
             type: 'text',
-            value: `${bill.plates}${NBSP}${NBSP}${NBSP}`,
+            value: `${bill.plates}`,
+            style: { textAlign: 'right', fontSize: '14px', fontWeight: 'bold', padding: '2px 0' },
+          },
+          {
+            type: 'text',
+            value: `${bill.total}.00${NBSP}${NBSP}`,
             style: {
               textAlign: 'right',
-              fontSize: '16px',
+              fontSize: '12px',
               fontWeight: 'bold',
               padding: '2px 0',
             },
@@ -152,7 +401,7 @@ export async function printToken(bill: Bill) {
       ],
       tableFooter: [],
     },
-    sep(),
+    hr(),
     {
       type: 'text',
       value: `TOTAL Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}${NBSP}${NBSP}${NBSP}`,
@@ -160,26 +409,31 @@ export async function printToken(bill: Bill) {
         ...fullWidth,
         fontWeight: 'bold',
         textAlign: 'center',
+        fontSize: '14px',
         padding: '4px 0',
-        fontSize: '15px',
-        lineHeight: '1.2',
       },
     },
+    hr(),
     {
       type: 'text',
-      value: '&nbsp;',
+      value: `Verified by: __________________${NBSP}${NBSP}${NBSP}`,
       style: {
         ...fullWidth,
-        borderTop: '1px dashed #000',
-        fontSize: '0',
-        lineHeight: '0',
-        height: '0',
-        width: 'auto',
+        textAlign: 'left',
+        fontSize: '11px',
+        lineHeight: '1.4',
         marginTop: '4px',
-        marginRight: '28px',
       },
     },
+    cutLine(),
   ];
+}
+
+export async function printToken(bill: Bill) {
+  const printerName =
+    (getDb().prepare("SELECT value FROM settings WHERE key='printer_name'").get() as
+      | { value: string }
+      | undefined)?.value ?? '';
 
   const options: PosPrintOptions = {
     preview: false,
@@ -191,7 +445,12 @@ export async function printToken(bill: Bill) {
     silent: true,
   };
 
-  await PosPrinter.print(data, options);
+  // Two slips per bill: customer copy first (handed over), manager copy
+  // second (kept for end-of-day verification). Sequential print jobs let the
+  // printer auto-cut between them on cutter-equipped models; the dashed
+  // bottom line is the manual tear guide for the rest.
+  await PosPrinter.print(buildCustomerSlip(bill), options);
+  await PosPrinter.print(buildManagerSlip(bill), options);
 }
 
 // Sample slip used to verify printer wiring without burning a real token. The

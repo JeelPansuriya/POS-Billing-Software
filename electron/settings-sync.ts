@@ -5,7 +5,14 @@ import { BUILT_IN_SUPABASE_URL, BUILT_IN_SUPABASE_ANON_KEY } from './config';
 // last_sync_at, …) is intentionally excluded — sharing those would break each
 // install's local config. Prices ride along as virtual keys price_lunch /
 // price_dinner, so a single mechanism covers everything the admin can change.
-const SYNCED_KEYS = ['restaurant_name', 'backup_schedule', 'price_lunch', 'price_dinner'];
+const SYNCED_KEYS = [
+  'restaurant_name',
+  'restaurant_address',
+  'restaurant_mobile',
+  'backup_schedule',
+  'price_lunch',
+  'price_dinner',
+];
 
 function isPlaceholder(v: string | null | undefined): boolean {
   if (!v) return true;

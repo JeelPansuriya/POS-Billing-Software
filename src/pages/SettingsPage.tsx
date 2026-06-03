@@ -5,6 +5,8 @@ export default function SettingsPage() {
   const user = useApp((s) => s.user)!;
   const [prices, setPrices] = useState<{ lunch: number; dinner: number }>({ lunch: 0, dinner: 0 });
   const [restaurantName, setRestaurantName] = useState('');
+  const [restaurantAddress, setRestaurantAddress] = useState('');
+  const [restaurantMobile, setRestaurantMobile] = useState('');
   const [printerName, setPrinterName] = useState('');
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseKey, setSupabaseKey] = useState('');
@@ -23,6 +25,8 @@ export default function SettingsPage() {
     const p = await window.api.prices.get();
     setPrices(p);
     setRestaurantName((await window.api.settings.get('restaurant_name')) ?? '');
+    setRestaurantAddress((await window.api.settings.get('restaurant_address')) ?? '');
+    setRestaurantMobile((await window.api.settings.get('restaurant_mobile')) ?? '');
     setPrinterName((await window.api.settings.get('printer_name')) ?? '');
     setSupabaseUrl((await window.api.settings.get('supabase_url')) ?? '');
     setSupabaseKey((await window.api.settings.get('supabase_anon_key')) ?? '');
@@ -104,6 +108,8 @@ export default function SettingsPage() {
     await window.api.prices.set('lunch', Number(prices.lunch) || 0);
     await window.api.prices.set('dinner', Number(prices.dinner) || 0);
     await window.api.settings.set('restaurant_name', restaurantName.trim());
+    await window.api.settings.set('restaurant_address', restaurantAddress.trim());
+    await window.api.settings.set('restaurant_mobile', restaurantMobile.trim());
     await window.api.settings.set('printer_name', printerName.trim());
     await window.api.settings.set('supabase_url', trimmedUrl);
     await window.api.settings.set('supabase_anon_key', trimmedKey);
@@ -167,6 +173,23 @@ export default function SettingsPage() {
               value={restaurantName}
               onChange={(e) => setRestaurantName(e.target.value)}
               className="input"
+            />
+          </Field>
+          <Field label="Address (printed on customer copy)">
+            <textarea
+              value={restaurantAddress}
+              onChange={(e) => setRestaurantAddress(e.target.value)}
+              rows={2}
+              className="input"
+              placeholder="Street, area, city-pincode"
+            />
+          </Field>
+          <Field label="Mobile (printed on customer copy)">
+            <input
+              value={restaurantMobile}
+              onChange={(e) => setRestaurantMobile(e.target.value)}
+              className="input"
+              placeholder="9081810895"
             />
           </Field>
         </Section>

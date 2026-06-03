@@ -181,6 +181,11 @@ export function initDb() {
     if (!row) db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(key, value);
   };
   seedSetting('restaurant_name', 'Jay Girr Kathiyawadi');
+  seedSetting(
+    'restaurant_address',
+    '105, Sky Tatva, opp. Amba Ashram, College Road, Nadiad-387001'
+  );
+  seedSetting('restaurant_mobile', '9081810895');
   // One-time rename for installs that still hold the original default. Custom
   // values set via Settings are left untouched.
   db.prepare(
