@@ -170,12 +170,24 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
         {
           type: 'text',
           value: 'QTY',
-          style: { textAlign: 'right', fontSize: '11px', fontWeight: 'bold', width: '15%' },
+          style: {
+            textAlign: 'right',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            width: '15%',
+            paddingRight: '12px',
+          },
         },
         {
           type: 'text',
           value: 'Price',
-          style: { textAlign: 'right', fontSize: '11px', fontWeight: 'bold', width: '20%' },
+          style: {
+            textAlign: 'right',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            width: '20%',
+            paddingRight: '12px',
+          },
         },
         {
           type: 'text',
@@ -194,17 +206,31 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
           {
             type: 'text',
             value: '1 THALI',
-            style: { textAlign: 'left', fontSize: '12px', fontWeight: 'bold', padding: '2px 0' },
+            style: {
+              textAlign: 'left',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              padding: '2px 12px 2px 0',
+            },
           },
           {
             type: 'text',
             value: `${bill.plates}`,
-            style: { textAlign: 'right', fontSize: '14px', fontWeight: 'bold', padding: '2px 0' },
+            style: {
+              textAlign: 'right',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              padding: '2px 12px 2px 0',
+            },
           },
           {
             type: 'text',
             value: `${bill.pricePerPlate}.00`,
-            style: { textAlign: 'right', fontSize: '11px', padding: '2px 0' },
+            style: {
+              textAlign: 'right',
+              fontSize: '11px',
+              padding: '2px 12px 2px 0',
+            },
           },
           {
             type: 'text',
@@ -346,17 +372,35 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
         {
           type: 'text',
           value: 'SNo',
-          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '15%' },
+          style: {
+            textAlign: 'left',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            width: '15%',
+            paddingRight: '12px',
+          },
         },
         {
           type: 'text',
           value: 'Item',
-          style: { textAlign: 'left', fontSize: '11px', fontWeight: 'bold', width: '40%' },
+          style: {
+            textAlign: 'left',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            width: '40%',
+            paddingRight: '12px',
+          },
         },
         {
           type: 'text',
           value: 'QTY',
-          style: { textAlign: 'right', fontSize: '11px', fontWeight: 'bold', width: '20%' },
+          style: {
+            textAlign: 'right',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            width: '20%',
+            paddingRight: '12px',
+          },
         },
         {
           type: 'text',
@@ -375,17 +419,27 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
           {
             type: 'text',
             value: '1',
-            style: { textAlign: 'left', fontSize: '12px', padding: '2px 0' },
+            style: { textAlign: 'left', fontSize: '12px', padding: '2px 12px 2px 0' },
           },
           {
             type: 'text',
             value: 'THALI',
-            style: { textAlign: 'left', fontSize: '12px', fontWeight: 'bold', padding: '2px 0' },
+            style: {
+              textAlign: 'left',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              padding: '2px 12px 2px 0',
+            },
           },
           {
             type: 'text',
             value: `${bill.plates}`,
-            style: { textAlign: 'right', fontSize: '14px', fontWeight: 'bold', padding: '2px 0' },
+            style: {
+              textAlign: 'right',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              padding: '2px 12px 2px 0',
+            },
           },
           {
             type: 'text',
@@ -439,7 +493,7 @@ export async function printToken(bill: Bill) {
     preview: false,
     // Right page margin keeps the H80i / POS80 from clipping right-aligned
     // amounts. Bottom feed is still driver-controlled (per project memory).
-    margin: '0 4mm 0 0',
+    margin: '0 4mm 0 4mm',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
@@ -537,7 +591,7 @@ export async function printTest() {
     preview: false,
     // Right page margin keeps the H80i / POS80 from clipping right-aligned
     // amounts. Bottom feed is still driver-controlled (per project memory).
-    margin: '0 4mm 0 0',
+    margin: '0 4mm 0 4mm',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,
@@ -686,7 +740,7 @@ export async function printDaySummary(s: DaySummary) {
 
   const options: PosPrintOptions = {
     preview: false,
-    margin: '0 4mm 30px 0',
+    margin: '0 4mm 30px 4mm',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,

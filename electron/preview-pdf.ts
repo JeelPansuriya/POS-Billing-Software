@@ -58,16 +58,16 @@ function customerSlipHtml(bill: Bill): string {
   <div class="hr"></div>
   <table>
     <thead><tr>
-      <th style="text-align:left;font-size:11px;width:40%;">No.Item</th>
-      <th style="text-align:right;font-size:11px;width:15%;">QTY</th>
-      <th style="text-align:right;font-size:11px;width:20%;">Price</th>
-      <th style="text-align:right;font-size:11px;width:25%;padding-right:8px;">Amount</th>
+      <th style="text-align:left;font-size:11px;width:40%;padding-right:12px;">No.Item</th>
+      <th style="text-align:right;font-size:11px;width:15%;padding-right:12px;">QTY</th>
+      <th style="text-align:right;font-size:11px;width:20%;padding-right:12px;">Price</th>
+      <th style="text-align:right;font-size:11px;width:25%;padding-right:16px;">Amount</th>
     </tr></thead>
     <tbody><tr>
-      <td style="text-align:left;font-size:12px;font-weight:bold;">1 THALI</td>
-      <td style="text-align:right;font-size:14px;font-weight:bold;">${bill.plates}</td>
-      <td style="text-align:right;font-size:11px;">${bill.pricePerPlate}.00</td>
-      <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:8px;">${bill.total}.00</td>
+      <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">1 THALI</td>
+      <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${bill.plates}</td>
+      <td style="text-align:right;font-size:11px;padding-right:12px;">${bill.pricePerPlate}.00</td>
+      <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${bill.total}.00</td>
     </tr></tbody>
   </table>
   <div class="hr"></div>
@@ -99,16 +99,16 @@ function managerSlipHtml(bill: Bill): string {
   <div class="hr"></div>
   <table>
     <thead><tr>
-      <th style="text-align:left;font-size:11px;width:15%;">SNo</th>
-      <th style="text-align:left;font-size:11px;width:40%;">Item</th>
-      <th style="text-align:right;font-size:11px;width:20%;">QTY</th>
-      <th style="text-align:right;font-size:11px;width:25%;padding-right:8px;">Amount</th>
+      <th style="text-align:left;font-size:11px;width:15%;padding-right:12px;">SNo</th>
+      <th style="text-align:left;font-size:11px;width:40%;padding-right:12px;">Item</th>
+      <th style="text-align:right;font-size:11px;width:20%;padding-right:12px;">QTY</th>
+      <th style="text-align:right;font-size:11px;width:25%;padding-right:16px;">Amount</th>
     </tr></thead>
     <tbody><tr>
-      <td style="text-align:left;font-size:12px;">1</td>
-      <td style="text-align:left;font-size:12px;font-weight:bold;">THALI</td>
-      <td style="text-align:right;font-size:14px;font-weight:bold;">${bill.plates}</td>
-      <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:8px;">${bill.total}.00</td>
+      <td style="text-align:left;font-size:12px;padding-right:12px;">1</td>
+      <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">THALI</td>
+      <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${bill.plates}</td>
+      <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${bill.total}.00</td>
     </tr></tbody>
   </table>
   <div class="hr"></div>
@@ -123,7 +123,7 @@ function buildTokenHtml(bill: Bill): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><style>
 @page { size: 80mm auto; margin: 0; }
-html, body { margin: 0; padding: 6px 16px 6px 8px; font-family: Arial, sans-serif; color: #000; }
+html, body { margin: 0; padding: 6px 16px; font-family: Arial, sans-serif; color: #000; }
 .full { width: 100%; display: block; }
 .slip { page-break-after: always; }
 .slip:last-child { page-break-after: auto; }
