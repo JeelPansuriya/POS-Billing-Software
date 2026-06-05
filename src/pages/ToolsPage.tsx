@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
 
+// SQLite's datetime('now') stores UTC as "YYYY-MM-DD HH:MM:SS" with no Z, and
+// JS's Date() then treats that as local — wrong by the local TZ offset.
+// Normalize to ISO with explicit Z so toLocale*() returns the correct hour.
+function parseDbDate(s: string): string {
+  return s.includes('T') ? s : s.replace(' ', 'T') + 'Z';
+}
+
 type AuditRow = {
   id: string;
   at: string;
@@ -346,7 +353,7 @@ export default function ToolsPage() {
                   {cash.counted.note && <span> · {cash.counted.note}</span>}
                   <span className="ml-2 text-xs text-gray-500">
                     by {cash.counted.recordedBy ?? '—'} ·{' '}
-                    {new Date(cash.counted.recordedAt).toLocaleTimeString()}
+                    {new Date(parseDbDate(cash.counted.recordedAt)).toLocaleTimeString()}
                   </span>
                 </div>
               )}
@@ -480,7 +487,7 @@ export default function ToolsPage() {
                 {audit.map((r) => (
                   <tr key={r.id} className="border-t">
                     <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-600">
-                      {new Date(r.at).toLocaleString()}
+                      {new Date(parseDbDate(r.at)).toLocaleString()}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{r.actor_username ?? '—'}</td>
                     <td className="px-3 py-2 whitespace-nowrap font-mono text-xs">{r.action}</td>

@@ -79,7 +79,13 @@ const cutLine = (): PosPrintData => ({
 });
 
 function fmtBillTimes(createdAt: string) {
-  const date = new Date(createdAt);
+  // SQLite's datetime('now') stores UTC as "YYYY-MM-DD HH:MM:SS" with no
+  // timezone marker. new Date() of that string parses as LOCAL time, which
+  // makes a 14:30 IST bill (= UTC 09:00) print as "09:00". Normalize to ISO
+  // with explicit Z so the Date is treated as UTC and getHours() returns the
+  // correct local hour.
+  const iso = createdAt.includes('T') ? createdAt : createdAt.replace(' ', 'T') + 'Z';
+  const date = new Date(iso);
   const dd = String(date.getDate()).padStart(2, '0');
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const yyyy = String(date.getFullYear());

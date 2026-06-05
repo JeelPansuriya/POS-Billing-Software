@@ -6,6 +6,14 @@ import VoidBillModal from '../components/VoidBillModal';
 
 const QUICK_PLATES = [1, 2, 3, 4, 5, 6, 7, 8];
 
+// SQLite stores created_at as "YYYY-MM-DD HH:MM:SS" (UTC, no Z marker), which
+// JS's Date() parses as local — so a 14:30 IST bill prints/displays as 09:00.
+// Append 'T' + 'Z' so it's read as UTC and the local-time helpers shift it
+// back to wall-clock hours correctly.
+function parseDbDate(s: string): string {
+  return s.includes('T') ? s : s.replace(' ', 'T') + 'Z';
+}
+
 export default function BillingPage() {
   const mealType = useApp((s) => s.mealType);
   const [plates, setPlates] = useState(1);
@@ -249,13 +257,13 @@ export default function BillingPage() {
                     </span>
                     <span className="text-gray-500">
                       {searchHits !== null
-                        ? new Date(b.created_at).toLocaleString([], {
+                        ? new Date(parseDbDate(b.created_at)).toLocaleString([], {
                             day: '2-digit',
                             month: '2-digit',
                             hour: '2-digit',
                             minute: '2-digit',
                           })
-                        : new Date(b.created_at).toLocaleTimeString([], {
+                        : new Date(parseDbDate(b.created_at)).toLocaleTimeString([], {
                             hour: '2-digit',
                             minute: '2-digit',
                           })}

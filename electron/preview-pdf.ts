@@ -25,7 +25,10 @@ function escapeHtml(s: string): string {
 }
 
 function fmtTimes(createdAt: string) {
-  const date = new Date(createdAt);
+  // Same UTC-vs-local fix as printer.ts: SQLite's space-separated UTC string
+  // is parsed as local by JS unless we explicitly mark it as Z.
+  const iso = createdAt.includes('T') ? createdAt : createdAt.replace(' ', 'T') + 'Z';
+  const date = new Date(iso);
   const dd = String(date.getDate()).padStart(2, '0');
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const yyyy = String(date.getFullYear());
