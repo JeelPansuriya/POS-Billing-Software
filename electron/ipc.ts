@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { getDb, localISODate, nextTokenNo, writeAudit } from './db';
 import { printToken, printDaySummary, printTest } from './printer';
 import { syncPendingBills } from './sync';
-import { pushSetting, pushPrices } from './settings-sync';
+import { pushSetting, pushPrices, pushExtrasCatalog } from './settings-sync';
 import { previewTokenPdf } from './preview-pdf';
 import { exportDay, openExportFolder, getExportDir } from './export';
 import { dialog } from 'electron';
@@ -132,6 +132,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
         plates: number;
         mealType: 'lunch' | 'dinner';
         paymentMode: 'cash' | 'upi';
+        extras?: Array<{ extraId: string; qty: number }>;
       }
     ) => {
       const priceRow = getDb()
@@ -139,24 +140,70 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
         .get(payload.mealType) as { price_per_plate: number } | undefined;
       if (!priceRow) return { ok: false, error: 'Price not configured' };
 
+      // Resolve each requested extra against the catalog. We snapshot
+      // name + unit_price into bill_extras so a later admin price change
+      // doesn't rewrite this bill's history.
+      type ExtraResolved = {
+        id: string;
+        extraId: string;
+        name: string;
+        qty: number;
+        unitPrice: number;
+        total: number;
+        sortOrder: number;
+      };
+      const requestedExtras = (payload.extras ?? []).filter((e) => e.qty > 0);
+      const extrasResolved: ExtraResolved[] = [];
+      for (const e of requestedExtras) {
+        const cat = getDb()
+          .prepare(
+            'SELECT id, name, unit_price, sort_order FROM extras_catalog WHERE id = ? AND active = 1'
+          )
+          .get(e.extraId) as
+          | { id: string; name: string; unit_price: number; sort_order: number }
+          | undefined;
+        if (!cat) return { ok: false, error: `Extra not found: ${e.extraId}` };
+        extrasResolved.push({
+          id: randomUUID(),
+          extraId: cat.id,
+          name: cat.name,
+          qty: e.qty,
+          unitPrice: cat.unit_price,
+          total: cat.unit_price * e.qty,
+          sortOrder: cat.sort_order,
+        });
+      }
+
       const id = randomUUID();
       const tokenNo = nextTokenNo();
-      const total = priceRow.price_per_plate * payload.plates;
+      const thaliSubtotal = priceRow.price_per_plate * payload.plates;
+      const extrasSubtotal = extrasResolved.reduce((s, x) => s + x.total, 0);
+      const total = thaliSubtotal + extrasSubtotal;
 
-      getDb()
-        .prepare(
-          `INSERT INTO bills (id, token_no, plates, meal_type, price_per_plate, total, payment_mode)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          id,
-          tokenNo,
-          payload.plates,
-          payload.mealType,
-          priceRow.price_per_plate,
-          total,
-          payload.paymentMode
+      const tx = getDb().transaction(() => {
+        getDb()
+          .prepare(
+            `INSERT INTO bills (id, token_no, plates, meal_type, price_per_plate, total, payment_mode)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            id,
+            tokenNo,
+            payload.plates,
+            payload.mealType,
+            priceRow.price_per_plate,
+            total,
+            payload.paymentMode
+          );
+        const insExtra = getDb().prepare(
+          `INSERT INTO bill_extras (id, bill_id, extra_id, name, qty, unit_price, total, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         );
+        for (const x of extrasResolved) {
+          insExtra.run(x.id, id, x.extraId, x.name, x.qty, x.unitPrice, x.total, x.sortOrder);
+        }
+      });
+      tx();
 
       const bill = {
         id,
@@ -167,9 +214,14 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
         total,
         paymentMode: payload.paymentMode,
         createdAt: new Date().toISOString(),
+        extras: extrasResolved.map((x) => ({
+          name: x.name,
+          qty: x.qty,
+          unitPrice: x.unitPrice,
+          total: x.total,
+        })),
       };
 
-      // Fire-and-forget print and sync
       const restaurantName =
         (getDb().prepare("SELECT value FROM settings WHERE key='restaurant_name'").get() as
           | { value: string }
@@ -190,6 +242,171 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       return { ok: true, bill, printError };
     }
   );
+
+  // ---- TEST PRINT ----
+  // Same shape as bills:create but writes nothing: no bills row, no
+  // bill_extras row, no token-number consumption (nextTokenNo only reads),
+  // no audit log entry, no sync trigger. Used by the admin to verify the
+  // slip layout / printer driver / paper feed without polluting analytics
+  // or pushing fake data to Supabase.
+  ipcMain.handle(
+    'bills:testPrint',
+    async (
+      _e,
+      payload: {
+        plates: number;
+        mealType: 'lunch' | 'dinner';
+        paymentMode: 'cash' | 'upi';
+        extras?: Array<{ extraId: string; qty: number }>;
+      }
+    ) => {
+      const priceRow = getDb()
+        .prepare('SELECT price_per_plate FROM prices WHERE meal_type = ?')
+        .get(payload.mealType) as { price_per_plate: number } | undefined;
+      if (!priceRow) return { ok: false, error: 'Price not configured' };
+
+      const requestedExtras = (payload.extras ?? []).filter((e) => e.qty > 0);
+      const extras: Array<{ name: string; qty: number; unitPrice: number; total: number }> = [];
+      for (const e of requestedExtras) {
+        const cat = getDb()
+          .prepare('SELECT name, unit_price FROM extras_catalog WHERE id = ? AND active = 1')
+          .get(e.extraId) as { name: string; unit_price: number } | undefined;
+        if (!cat) return { ok: false, error: `Extra not found: ${e.extraId}` };
+        extras.push({
+          name: cat.name,
+          qty: e.qty,
+          unitPrice: cat.unit_price,
+          total: cat.unit_price * e.qty,
+        });
+      }
+
+      const thaliSubtotal = priceRow.price_per_plate * payload.plates;
+      const extrasSubtotal = extras.reduce((s, x) => s + x.total, 0);
+      const total = thaliSubtotal + extrasSubtotal;
+      const restaurantName =
+        (getDb().prepare("SELECT value FROM settings WHERE key='restaurant_name'").get() as
+          | { value: string }
+          | undefined)?.value ?? 'Restaurant';
+
+      try {
+        await printToken({
+          id: 'test-print',
+          tokenNo: nextTokenNo(),
+          plates: payload.plates,
+          mealType: payload.mealType,
+          pricePerPlate: priceRow.price_per_plate,
+          total,
+          paymentMode: payload.paymentMode,
+          createdAt: new Date().toISOString(),
+          restaurantName,
+          extras,
+        });
+        return { ok: true };
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? String(err) };
+      }
+    }
+  );
+
+  // ---- EXTRAS CATALOG ----
+  // Active list — used by the cashier to populate the bill UI.
+  ipcMain.handle('extras:list', () => {
+    return getDb()
+      .prepare(
+        'SELECT id, name, unit_price as unitPrice, active, sort_order as sortOrder FROM extras_catalog WHERE active = 1 ORDER BY sort_order, name'
+      )
+      .all();
+  });
+
+  // Full list (active + archived) — admin Menu page.
+  ipcMain.handle('extras:listAll', () => {
+    return getDb()
+      .prepare(
+        'SELECT id, name, unit_price as unitPrice, active, sort_order as sortOrder FROM extras_catalog ORDER BY sort_order, name'
+      )
+      .all();
+  });
+
+  ipcMain.handle(
+    'extras:upsert',
+    (
+      _e,
+      payload: { id?: string; name: string; unitPrice: number; active: boolean; sortOrder: number }
+    ) => {
+      const name = payload.name.trim();
+      if (!name) return { ok: false, error: 'Name required' };
+      if (!Number.isFinite(payload.unitPrice) || payload.unitPrice <= 0) {
+        return { ok: false, error: 'Price must be a positive number' };
+      }
+      const isUpdate = !!payload.id;
+      const id = payload.id ?? randomUUID();
+      try {
+        if (isUpdate) {
+          const prev = getDb()
+            .prepare('SELECT name, unit_price, active FROM extras_catalog WHERE id = ?')
+            .get(id) as
+            | { name: string; unit_price: number; active: number }
+            | undefined;
+          if (!prev) return { ok: false, error: 'Item not found' };
+          getDb()
+            .prepare(
+              `UPDATE extras_catalog
+                  SET name = ?, unit_price = ?, active = ?, sort_order = ?, updated_at = datetime('now')
+                WHERE id = ?`
+            )
+            .run(name, Math.round(payload.unitPrice), payload.active ? 1 : 0, payload.sortOrder, id);
+          writeAudit({
+            ...actorFields(),
+            action: 'extras_change',
+            entityType: 'extra',
+            entityId: id,
+            details: {
+              from: { name: prev.name, price: prev.unit_price, active: !!prev.active },
+              to: { name, price: payload.unitPrice, active: payload.active },
+            },
+          });
+        } else {
+          getDb()
+            .prepare(
+              `INSERT INTO extras_catalog (id, name, unit_price, active, sort_order)
+               VALUES (?, ?, ?, ?, ?)`
+            )
+            .run(id, name, Math.round(payload.unitPrice), payload.active ? 1 : 0, payload.sortOrder);
+          writeAudit({
+            ...actorFields(),
+            action: 'extras_change',
+            entityType: 'extra',
+            entityId: id,
+            details: { created: { name, price: payload.unitPrice, active: payload.active } },
+          });
+        }
+        pushExtrasCatalog().catch((e) => console.error('Push extras failed:', e));
+        return { ok: true, id };
+      } catch (err: any) {
+        // UNIQUE constraint violation on name — give a friendlier message.
+        const msg = String(err?.message ?? err);
+        if (msg.includes('UNIQUE')) return { ok: false, error: 'An item with that name already exists' };
+        return { ok: false, error: msg };
+      }
+    }
+  );
+
+  ipcMain.handle('extras:delete', (_e, id: string) => {
+    const prev = getDb()
+      .prepare('SELECT name FROM extras_catalog WHERE id = ?')
+      .get(id) as { name: string } | undefined;
+    if (!prev) return { ok: false, error: 'Item not found' };
+    getDb().prepare('DELETE FROM extras_catalog WHERE id = ?').run(id);
+    writeAudit({
+      ...actorFields(),
+      action: 'extras_change',
+      entityType: 'extra',
+      entityId: id,
+      details: { deleted: { name: prev.name } },
+    });
+    pushExtrasCatalog().catch((e) => console.error('Push extras failed:', e));
+    return { ok: true };
+  });
 
   // ---- VOID ----
   ipcMain.handle('bills:void', async (_e, billId: string, reason: string) => {
@@ -256,7 +473,34 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       }
       const sql = `SELECT * FROM bills ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`;
       params.push(filter.limit ?? 1000);
-      return getDb().prepare(sql).all(...params);
+      const bills = getDb().prepare(sql).all(...params) as Array<{ id: string }>;
+      if (bills.length === 0) return bills;
+      // Single batched query for all extras in this page, grouped by bill_id
+      // in JS — avoids an N+1 query per row.
+      const placeholders = bills.map(() => '?').join(',');
+      const extras = getDb()
+        .prepare(
+          `SELECT bill_id, name, qty, unit_price as unitPrice, total
+             FROM bill_extras
+            WHERE bill_id IN (${placeholders})
+            ORDER BY sort_order, name`
+        )
+        .all(...bills.map((b) => b.id)) as Array<{
+        bill_id: string;
+        name: string;
+        qty: number;
+        unitPrice: number;
+        total: number;
+      }>;
+      const byBill = new Map<string, typeof extras>();
+      for (const e of extras) {
+        if (!byBill.has(e.bill_id)) byBill.set(e.bill_id, []);
+        byBill.get(e.bill_id)!.push(e);
+      }
+      return bills.map((b) => ({
+        ...b,
+        extras: (byBill.get(b.id) ?? []).map(({ bill_id, ...rest }) => rest),
+      }));
     }
   );
 
@@ -926,6 +1170,12 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       (getDb().prepare("SELECT value FROM settings WHERE key='restaurant_name'").get() as
         | { value: string }
         | undefined)?.value ?? 'Restaurant';
+    const extras = getDb()
+      .prepare(
+        `SELECT name, qty, unit_price as unitPrice, total
+           FROM bill_extras WHERE bill_id = ? ORDER BY sort_order, name`
+      )
+      .all(bill.id) as Array<{ name: string; qty: number; unitPrice: number; total: number }>;
     await printToken({
       id: bill.id,
       tokenNo: bill.token_no,
@@ -936,6 +1186,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       paymentMode: bill.payment_mode,
       createdAt: bill.created_at,
       restaurantName,
+      extras,
     });
     return { ok: true };
   });

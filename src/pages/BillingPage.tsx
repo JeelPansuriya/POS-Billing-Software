@@ -16,6 +16,11 @@ function parseDbDate(s: string): string {
 
 export default function BillingPage() {
   const mealType = useApp((s) => s.mealType);
+  const user = useApp((s) => s.user);
+  // Admin-only "test mode": submit prints the slip but skips DB write, audit
+  // log, and Supabase sync. Session-only — toggle resets on reload so a forgotten
+  // toggle can't silently swallow real sales.
+  const [testMode, setTestMode] = useState(false);
   const [plates, setPlates] = useState(1);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('cash');
   const [prices, setPrices] = useState<{ lunch: number; dinner: number }>({ lunch: 0, dinner: 0 });
@@ -32,6 +37,18 @@ export default function BillingPage() {
   const [recent, setRecent] = useState<any[]>([]);
   const [tokenSearch, setTokenSearch] = useState('');
   const [searchHits, setSearchHits] = useState<any[] | null>(null);
+  const [extras, setExtras] = useState<
+    Array<{ id: string; name: string; unitPrice: number; active: number; sortOrder: number }>
+  >([]);
+  // qty per extra id, only stored when > 0
+  const [extraQty, setExtraQty] = useState<Record<string, number>>({});
+  const setQty = (id: string, q: number) =>
+    setExtraQty((prev) => {
+      const next = { ...prev };
+      if (q <= 0) delete next[id];
+      else next[id] = q;
+      return next;
+    });
   const [stats, setStats] = useState<{
     nextTokenNo: number;
     bills: number;
@@ -49,10 +66,13 @@ export default function BillingPage() {
   } | null>(null);
 
   const refreshPrices = async () => setPrices(await window.api.prices.get());
+  const refreshExtras = async () => setExtras(await window.api.extras.list());
   const refreshRecent = async () => {
+    // All of today's bills, newest first. IPC's default LIMIT is 1000 which
+    // is far more than a single restaurant produces in a day.
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const list = await window.api.bills.list({ from: today.toISOString(), limit: 10 });
+    const list = await window.api.bills.list({ from: today.toISOString() });
     setRecent(list);
   };
   const refreshStats = async () => setStats(await window.api.stats.today());
@@ -75,16 +95,48 @@ export default function BillingPage() {
     refreshPrices();
     refreshRecent();
     refreshStats();
+    refreshExtras();
   }, []);
 
   const pricePerPlate = prices[mealType];
-  const total = pricePerPlate * plates;
+  const thaliSubtotal = pricePerPlate * plates;
+  const extrasSubtotal = extras.reduce(
+    (s, x) => s + (extraQty[x.id] ?? 0) * x.unitPrice,
+    0
+  );
+  const total = thaliSubtotal + extrasSubtotal;
 
   const submit = async () => {
     if (busy || plates < 1) return;
     setBusy(true);
     try {
-      const res = await window.api.bills.create({ plates, mealType, paymentMode });
+      const extrasPayload = Object.entries(extraQty)
+        .filter(([, q]) => q > 0)
+        .map(([extraId, qty]) => ({ extraId, qty }));
+      if (testMode) {
+        const r = await window.api.bills.testPrint({
+          plates,
+          mealType,
+          paymentMode,
+          extras: extrasPayload,
+        });
+        if (r.ok) {
+          // Reset the form so the admin can iterate quickly without leftover
+          // state from the prior test slip.
+          setPlates(1);
+          setPaymentMode('cash');
+          setExtraQty({});
+        } else {
+          alert(`Test print failed: ${r.error ?? 'unknown'}`);
+        }
+        return;
+      }
+      const res = await window.api.bills.create({
+        plates,
+        mealType,
+        paymentMode,
+        extras: extrasPayload,
+      });
       if (res.ok && res.bill) {
         setLastBill({
           id: res.bill.id,
@@ -97,6 +149,7 @@ export default function BillingPage() {
         });
         setPlates(1);
         setPaymentMode('cash');
+        setExtraQty({});
         refreshRecent();
         refreshStats();
         // Print failures stay on-screen until dismissed; successful prints
@@ -173,7 +226,13 @@ export default function BillingPage() {
   }, [showSummary, voidTarget, busy, plates, mealType, paymentMode, pricePerPlate]);
 
   return (
-    <div className="h-full flex">
+    <div className="h-full flex flex-col">
+      {testMode && (
+        <div className="bg-amber-500 text-white text-center py-2 text-sm font-semibold tracking-wide">
+          🧪 TEST MODE — bills are NOT saved or synced. Printer test only.
+        </div>
+      )}
+      <div className="flex-1 flex min-h-0">
       {/* LEFT: Quick plate-count buttons (bigger section) */}
       <div className="flex-1 p-6 bg-white border-r overflow-auto">
         <div className="flex items-center justify-between mb-4">
@@ -184,6 +243,24 @@ export default function BillingPage() {
               <kbd className="px-1.5 py-0.5 rounded border bg-white text-xs font-mono">C</kbd>/<kbd className="px-1.5 py-0.5 rounded border bg-white text-xs font-mono">U</kbd> ·{' '}
               <kbd className="px-1.5 py-0.5 rounded border bg-white text-xs font-mono">Enter</kbd>
             </div>
+            {user?.role === 'admin' && (
+              <label
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-medium cursor-pointer select-none ${
+                  testMode
+                    ? 'bg-amber-100 border-amber-400 text-amber-900'
+                    : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+                title="Print without saving to DB or syncing — for testing"
+              >
+                <input
+                  type="checkbox"
+                  checked={testMode}
+                  onChange={(e) => setTestMode(e.target.checked)}
+                  className="accent-amber-600"
+                />
+                Test mode
+              </label>
+            )}
             <button
               onClick={() => setShowSummary(true)}
               className="px-3 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-900 text-white text-sm font-medium"
@@ -193,32 +270,75 @@ export default function BillingPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-4 gap-3">
           {QUICK_PLATES.map((n) => (
             <button
               key={n}
               onClick={() => setPlates(n)}
-              className={`aspect-square rounded-2xl border-2 text-3xl font-bold transition-all shadow-sm ${
+              className={`h-20 rounded-xl border-2 text-2xl font-bold transition-all shadow-sm ${
                 plates === n
                   ? 'bg-brand-600 text-white border-brand-700 scale-95'
                   : 'bg-gradient-to-br from-orange-50 to-orange-100 text-brand-700 border-orange-200 hover:from-orange-100 hover:to-orange-200 active:scale-95'
               }`}
             >
               <div>{n}</div>
-              <div className="text-xs font-normal opacity-75">
+              <div className="text-[10px] font-normal opacity-75 mt-0.5">
                 {n === 1 ? 'plate' : 'plates'}
               </div>
             </button>
           ))}
         </div>
 
-        {/* Recent bills today */}
+        {/* Extras (managed in Menu page) */}
+        {extras.length > 0 && (
+          <div className="mt-6">
+            <h3 className="text-sm font-semibold text-gray-600 mb-2">Extras</h3>
+            <div className="grid grid-cols-3 gap-3">
+              {extras.map((x) => {
+                const q = extraQty[x.id] ?? 0;
+                return (
+                  <div
+                    key={x.id}
+                    className={`flex items-center justify-between gap-3 px-3 py-2 rounded-lg border ${
+                      q > 0
+                        ? 'bg-orange-50 border-orange-300'
+                        : 'bg-white border-gray-200'
+                    }`}
+                  >
+                    <div className="flex flex-col min-w-0">
+                      <span className="font-medium truncate">{x.name}</span>
+                      <span className="text-xs text-gray-500 tabular-nums">₹{x.unitPrice}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setQty(x.id, Math.max(0, q - 1))}
+                        disabled={q === 0}
+                        className="w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 disabled:opacity-40 text-lg font-bold"
+                      >
+                        −
+                      </button>
+                      <span className="w-6 text-center tabular-nums font-semibold">{q}</span>
+                      <button
+                        onClick={() => setQty(x.id, q + 1)}
+                        className="w-8 h-8 rounded-full bg-brand-600 hover:bg-brand-700 text-white text-lg font-bold"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* All bills, newest first */}
         <div className="mt-8">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm font-semibold text-gray-600">
               {searchHits !== null
                 ? `Search results for token #${tokenSearch.trim()}`
-                : "Today's recent tokens"}
+                : `Today's bills (${recent.length})`}
             </h3>
             <input
               type="text"
@@ -232,7 +352,7 @@ export default function BillingPage() {
               className="px-2 py-1 text-sm border border-gray-300 rounded w-40"
             />
           </div>
-          <div className="bg-gray-50 rounded-lg border border-gray-200 max-h-44 overflow-auto">
+          <div className="bg-gray-50 rounded-lg border border-gray-200 max-h-96 overflow-auto">
             {(searchHits ?? recent).length === 0 && (
               <div className="p-4 text-sm text-gray-400">
                 {searchHits !== null ? 'No bills with that token number.' : 'No bills yet today.'}
@@ -380,6 +500,7 @@ export default function BillingPage() {
           <div className="text-5xl font-bold text-brand-700 tabular-nums mt-1">₹{total}</div>
           <div className="text-xs text-gray-400 mt-1">
             {plates} × ₹{pricePerPlate}
+            {extrasSubtotal > 0 && ` + ₹${extrasSubtotal} extras`}
           </div>
         </div>
 
@@ -460,6 +581,7 @@ export default function BillingPage() {
           }}
         />
       )}
+      </div>
     </div>
   );
 }

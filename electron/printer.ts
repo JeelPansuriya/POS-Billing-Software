@@ -1,5 +1,17 @@
-import { PosPrinter, PosPrintOptions, PosPrintData } from 'electron-pos-printer';
+import {
+  PosPrinter,
+  PosPrintOptions,
+  PosPrintData,
+  PosPrintTableField,
+} from 'electron-pos-printer';
 import { getDb } from './db';
+
+type BillExtra = {
+  name: string;
+  qty: number;
+  unitPrice: number;
+  total: number;
+};
 
 type Bill = {
   id: string;
@@ -11,6 +23,7 @@ type Bill = {
   paymentMode: 'cash' | 'upi';
   createdAt: string;
   restaurantName: string;
+  extras?: BillExtra[];
 };
 
 // Thermal printers (8 dots/mm) struggle with anti-aliased proportional fonts —
@@ -105,6 +118,191 @@ function getRestaurantHeader() {
     mobile: get('restaurant_mobile'),
     insta: get('restaurant_insta'),
   };
+}
+
+// Sum of all line-item quantities (Thali + every extra). Mirrors what
+// "Total Qty" means on a typical retail slip: the count of physical items
+// across all rows, not the number of rows.
+function totalItemQty(bill: Bill): number {
+  return bill.plates + (bill.extras ?? []).reduce((s, x) => s + x.qty, 0);
+}
+
+// Customer item table rows: one Thali row, then one row per extra. Cells
+// match the 4-column header (No.Item / QTY / Price / Amount). Extracted so
+// the same shape can be reused in both customer and manager builders.
+function customerItemRows(bill: Bill): PosPrintTableField[][] {
+  const rows: PosPrintTableField[][] = [
+    [
+      {
+        type: 'text',
+        value: '1. THALI',
+        style: {
+          textAlign: 'left',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${bill.plates}`,
+        style: {
+          textAlign: 'right',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${bill.pricePerPlate}.00`,
+        style: {
+          textAlign: 'right',
+          fontWeight: 'bold',
+          fontSize: '11px',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${bill.plates * bill.pricePerPlate}.00`,
+        style: {
+          textAlign: 'right',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          padding: '2px 16px 2px 0',
+        },
+      },
+    ],
+  ];
+  (bill.extras ?? []).forEach((x, i) => {
+    rows.push([
+      {
+        type: 'text',
+        value: `${i + 2}. ${x.name.toUpperCase()}`,
+        style: {
+          textAlign: 'left',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${x.qty}`,
+        style: {
+          textAlign: 'right',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${x.unitPrice}.00`,
+        style: {
+          textAlign: 'right',
+          fontWeight: 'bold',
+          fontSize: '11px',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${x.total}.00`,
+        style: {
+          textAlign: 'right',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          padding: '2px 16px 2px 0',
+        },
+      },
+    ]);
+  });
+  return rows;
+}
+
+// Manager item table rows — 4 cols: SNo / Item / QTY / Amount (no Price col).
+function managerItemRows(bill: Bill): PosPrintTableField[][] {
+  const rows: PosPrintTableField[][] = [
+    [
+      {
+        type: 'text',
+        value: '1',
+        style: { textAlign: 'left', fontSize: '12px', padding: '2px 12px 2px 0' },
+      },
+      {
+        type: 'text',
+        value: 'THALI',
+        style: {
+          textAlign: 'left',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${bill.plates}`,
+        style: {
+          textAlign: 'right',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${bill.plates * bill.pricePerPlate}.00`,
+        style: {
+          textAlign: 'right',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          padding: '2px 16px 2px 0',
+        },
+      },
+    ],
+  ];
+  (bill.extras ?? []).forEach((x, i) => {
+    rows.push([
+      {
+        type: 'text',
+        value: `${i + 2}`,
+        style: { textAlign: 'left', fontSize: '12px', padding: '2px 12px 2px 0' },
+      },
+      {
+        type: 'text',
+        value: x.name.toUpperCase(),
+        style: {
+          textAlign: 'left',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${x.qty}`,
+        style: {
+          textAlign: 'right',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          padding: '2px 12px 2px 0',
+        },
+      },
+      {
+        type: 'text',
+        value: `${x.total}.00`,
+        style: {
+          textAlign: 'right',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          padding: '2px 16px 2px 0',
+        },
+      },
+    ]);
+  });
+  return rows;
 }
 
 // Customer copy — full restaurant header (name, address, mobile) and a
@@ -229,50 +427,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
           },
         },
       ],
-      tableBody: [
-        [
-          {
-            type: 'text',
-            value: '1. THALI',
-            style: {
-              textAlign: 'left',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              padding: '2px 12px 2px 0',
-            },
-          },
-          {
-            type: 'text',
-            value: `${bill.plates}`,
-            style: {
-              textAlign: 'right',
-              fontSize: '14px',
-              fontWeight: 'bold',
-              padding: '2px 12px 2px 0',
-            },
-          },
-          {
-            type: 'text',
-            value: `${bill.pricePerPlate}.00`,
-            style: {
-              textAlign: 'right',
-              fontWeight: 'bold',
-              fontSize: '11px',
-              padding: '2px 12px 2px 0',
-            },
-          },
-          {
-            type: 'text',
-            value: `${bill.total}.00`,
-            style: {
-              textAlign: 'right',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              padding: '2px 16px 2px 0',
-            },
-          },
-        ],
-      ],
+      tableBody: customerItemRows(bill),
       tableFooter: [],
     },
     hr(),
@@ -284,7 +439,7 @@ function buildCustomerSlip(bill: Bill): PosPrintData[] {
         [
           {
             type: 'text',
-            value: `Total Qty: ${bill.plates}`,
+            value: `Total Qty: ${totalItemQty(bill)}`,
             style: { textAlign: 'left', fontSize: '11px', padding: '0', margin: '0' },
           },
           {
@@ -461,45 +616,7 @@ function buildManagerSlip(bill: Bill): PosPrintData[] {
           },
         },
       ],
-      tableBody: [
-        [
-          {
-            type: 'text',
-            value: '1',
-            style: { textAlign: 'left', fontSize: '12px', padding: '2px 12px 2px 0' },
-          },
-          {
-            type: 'text',
-            value: 'THALI',
-            style: {
-              textAlign: 'left',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              padding: '2px 12px 2px 0',
-            },
-          },
-          {
-            type: 'text',
-            value: `${bill.plates}`,
-            style: {
-              textAlign: 'right',
-              fontSize: '14px',
-              fontWeight: 'bold',
-              padding: '2px 12px 2px 0',
-            },
-          },
-          {
-            type: 'text',
-            value: `${bill.total}.00`,
-            style: {
-              textAlign: 'right',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              padding: '2px 16px 2px 0',
-            },
-          },
-        ],
-      ],
+      tableBody: managerItemRows(bill),
       tableFooter: [],
     },
     hr(),

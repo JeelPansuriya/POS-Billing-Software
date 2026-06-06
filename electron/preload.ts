@@ -17,12 +17,45 @@ const api = {
     set: (mealType: 'lunch' | 'dinner', price: number) =>
       ipcRenderer.invoke('prices:set', mealType, price),
   },
+  extras: {
+    list: () =>
+      ipcRenderer.invoke('extras:list') as Promise<
+        Array<{ id: string; name: string; unitPrice: number; active: number; sortOrder: number }>
+      >,
+    listAll: () =>
+      ipcRenderer.invoke('extras:listAll') as Promise<
+        Array<{ id: string; name: string; unitPrice: number; active: number; sortOrder: number }>
+      >,
+    upsert: (payload: {
+      id?: string;
+      name: string;
+      unitPrice: number;
+      active: boolean;
+      sortOrder: number;
+    }) =>
+      ipcRenderer.invoke('extras:upsert', payload) as Promise<
+        { ok: true; id: string } | { ok: false; error: string }
+      >,
+    delete: (id: string) =>
+      ipcRenderer.invoke('extras:delete', id) as Promise<{ ok: boolean; error?: string }>,
+  },
   bills: {
     create: (payload: {
       plates: number;
       mealType: 'lunch' | 'dinner';
       paymentMode: 'cash' | 'upi';
+      extras?: Array<{ extraId: string; qty: number }>;
     }) => ipcRenderer.invoke('bills:create', payload),
+    testPrint: (payload: {
+      plates: number;
+      mealType: 'lunch' | 'dinner';
+      paymentMode: 'cash' | 'upi';
+      extras?: Array<{ extraId: string; qty: number }>;
+    }) =>
+      ipcRenderer.invoke('bills:testPrint', payload) as Promise<{
+        ok: boolean;
+        error?: string;
+      }>,
     list: (filter?: {
       from?: string;
       to?: string;

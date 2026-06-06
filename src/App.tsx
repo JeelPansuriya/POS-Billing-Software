@@ -6,6 +6,7 @@ import BillingPage from './pages/BillingPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import SettingsPage from './pages/SettingsPage';
 import ToolsPage from './pages/ToolsPage';
+import MenuPage from './pages/MenuPage';
 import AppLayout from './components/AppLayout';
 import OnboardingWizard from './components/OnboardingWizard';
 
@@ -57,6 +58,10 @@ export default function App() {
         <Route path="/" element={<BillingPage />} />
         <Route path="/tools" element={<ToolsPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route
+          path="/menu"
+          element={user.role === 'admin' ? <MenuPage /> : <Navigate to="/" replace />}
+        />
         <Route
           path="/settings"
           element={user.role === 'admin' ? <SettingsPage /> : <Navigate to="/" replace />}

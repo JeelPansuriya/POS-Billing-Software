@@ -90,6 +90,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             {tab('/', 'Billing')}
             {tab('/tools', 'Tools')}
             {tab('/analytics', 'Analytics')}
+            {user?.role === 'admin' && tab('/menu', 'Menu')}
             {user?.role === 'admin' && tab('/settings', 'Settings')}
           </nav>
         </div>

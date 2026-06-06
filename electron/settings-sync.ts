@@ -13,6 +13,9 @@ const SYNCED_KEYS = [
   'backup_schedule',
   'price_lunch',
   'price_dinner',
+  // Whole catalog serialized as a single JSON value. Treated as one key so
+  // pull-then-replace is atomic — all rows update or none.
+  'extras_catalog',
 ];
 
 function isPlaceholder(v: string | null | undefined): boolean {
@@ -107,6 +110,31 @@ export async function pushPrices(): Promise<void> {
 }
 
 /**
+ * Push the entire extras catalog as one JSON-encoded app_settings row.
+ * Call after any extras:upsert / extras:delete. Treating it as one atomic
+ * value avoids partial-update races between devices: the receiver always
+ * sees a consistent snapshot.
+ */
+export async function pushExtrasCatalog(): Promise<void> {
+  try {
+    const rows = getDb()
+      .prepare(
+        'SELECT id, name, unit_price, active, sort_order FROM extras_catalog ORDER BY sort_order, name'
+      )
+      .all() as Array<{
+      id: string;
+      name: string;
+      unit_price: number;
+      active: number;
+      sort_order: number;
+    }>;
+    await pushSetting('extras_catalog', JSON.stringify(rows));
+  } catch (err) {
+    console.error('pushExtrasCatalog failed', err);
+  }
+}
+
+/**
  * Pull settings rows newer than `last_settings_pull_at` and apply each
  * whitelisted key locally. Dedup keeps only the latest value per key
  * (rows are append-only on the server so the latest by updated_at wins).
@@ -159,6 +187,34 @@ function applyRemoteSetting(key: string, value: string) {
          ON CONFLICT(meal_type) DO UPDATE SET price_per_plate=excluded.price_per_plate, updated_at=datetime('now')`
       )
       .run(meal, Math.round(n));
+    return;
+  }
+  if (key === 'extras_catalog') {
+    // Replace-strategy: parse the snapshot, wipe local catalog, reinsert from
+    // the remote rows. Bills already reference items via denormalized name +
+    // unit_price snapshots, so re-keying catalog rows can't break history.
+    try {
+      const incoming = JSON.parse(value) as Array<{
+        id: string;
+        name: string;
+        unit_price: number;
+        active: number;
+        sort_order: number;
+      }>;
+      const tx = getDb().transaction(() => {
+        getDb().prepare('DELETE FROM extras_catalog').run();
+        const ins = getDb().prepare(
+          `INSERT INTO extras_catalog (id, name, unit_price, active, sort_order)
+           VALUES (?, ?, ?, ?, ?)`
+        );
+        for (const r of incoming) {
+          ins.run(r.id, r.name, r.unit_price, r.active ? 1 : 0, r.sort_order);
+        }
+      });
+      tx();
+    } catch (err) {
+      console.error('Apply remote extras_catalog failed:', err);
+    }
     return;
   }
   setSetting(key, value);

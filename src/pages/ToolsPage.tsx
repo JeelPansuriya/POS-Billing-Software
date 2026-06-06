@@ -82,6 +82,56 @@ export default function ToolsPage() {
     }
   };
 
+  // Day summary by date — pick any past day, view stats, optionally reprint.
+  type DaySummary = {
+    day: string;
+    totalBills: number;
+    totalPlates: number;
+    totalRevenue: number;
+    firstToken: number | null;
+    lastToken: number | null;
+    lunchPlates: number;
+    lunchRevenue: number;
+    dinnerPlates: number;
+    dinnerRevenue: number;
+    cashRevenue: number;
+    upiRevenue: number;
+  };
+  const todayIso = (() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  })();
+  const [summaryDate, setSummaryDate] = useState<string>(todayIso);
+  const [summaryData, setSummaryData] = useState<DaySummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryPrinting, setSummaryPrinting] = useState(false);
+  const loadSummary = async (day: string) => {
+    setSummaryLoading(true);
+    try {
+      setSummaryData(await window.api.day.summary(day));
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+  const printSummary = async () => {
+    setSummaryPrinting(true);
+    try {
+      const r = await window.api.day.print(summaryDate);
+      showFlash(
+        r.printed ? '✓ Day summary printed' : `Print failed: ${r.printError ?? 'unknown'}`
+      );
+    } finally {
+      setSummaryPrinting(false);
+    }
+  };
+  useEffect(() => {
+    loadSummary(summaryDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // DB integrity
   const [integrity, setIntegrity] = useState<{ ok: boolean; messages: string[] } | null>(null);
   const [integrityRunning, setIntegrityRunning] = useState(false);
@@ -281,6 +331,74 @@ export default function ToolsPage() {
           <p className="text-xs text-gray-400 mt-2">
             "Preview token (PDF)" renders a sample slip to PDF and opens it — no printer needed.
           </p>
+        </section>
+
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <h2 className="font-semibold text-gray-800 mb-3">Day summary by date</h2>
+          <p className="text-sm text-gray-500 mb-3">
+            Pick any past date to see that day's totals. The numbers exclude voided bills and
+            mirror what would print if you hit "Print this day" on the slip below.
+          </p>
+          <div className="flex items-center gap-2 mb-3">
+            <input
+              type="date"
+              value={summaryDate}
+              max={todayIso}
+              onChange={(e) => {
+                setSummaryDate(e.target.value);
+                if (e.target.value) loadSummary(e.target.value);
+              }}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+            <button
+              onClick={() => loadSummary(summaryDate)}
+              disabled={summaryLoading}
+              className="px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-100 text-sm font-medium disabled:opacity-50"
+            >
+              {summaryLoading ? 'Loading…' : 'Refresh'}
+            </button>
+            <button
+              onClick={printSummary}
+              disabled={summaryPrinting || !summaryData || summaryData.totalBills === 0}
+              className="ml-auto px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold disabled:opacity-50"
+            >
+              {summaryPrinting ? 'Printing…' : 'Print this day'}
+            </button>
+          </div>
+          {summaryData && (
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm bg-gray-50 rounded-lg border border-gray-200 p-4">
+              <SummaryRow label="Tokens issued" value={`${summaryData.totalBills}`} />
+              <SummaryRow
+                label="Token range"
+                value={
+                  summaryData.firstToken && summaryData.lastToken
+                    ? `#${summaryData.firstToken} – #${summaryData.lastToken}`
+                    : '—'
+                }
+              />
+              <SummaryRow label="Plates sold" value={`${summaryData.totalPlates}`} />
+              <SummaryRow
+                label="Total revenue"
+                value={`₹${summaryData.totalRevenue.toLocaleString()}`}
+                accent
+              />
+              <SummaryRow label="Lunch plates" value={`${summaryData.lunchPlates}`} />
+              <SummaryRow
+                label="Lunch revenue"
+                value={`₹${summaryData.lunchRevenue.toLocaleString()}`}
+              />
+              <SummaryRow label="Dinner plates" value={`${summaryData.dinnerPlates}`} />
+              <SummaryRow
+                label="Dinner revenue"
+                value={`₹${summaryData.dinnerRevenue.toLocaleString()}`}
+              />
+              <SummaryRow label="Cash" value={`₹${summaryData.cashRevenue.toLocaleString()}`} />
+              <SummaryRow label="UPI" value={`₹${summaryData.upiRevenue.toLocaleString()}`} />
+            </div>
+          )}
+          {summaryData && summaryData.totalBills === 0 && (
+            <p className="text-xs text-gray-400 mt-2">No bills on this day.</p>
+          )}
         </section>
 
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
@@ -508,3 +626,27 @@ export default function ToolsPage() {
     </div>
   );
 }
+
+function SummaryRow({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-gray-600">{label}</span>
+      <span
+        className={`tabular-nums ${
+          accent ? 'font-bold text-brand-700' : 'font-semibold text-gray-800'
+        }`}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+

@@ -76,6 +76,31 @@ export function initDb() {
       recorded_by_user_id TEXT,
       recorded_by_username TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS extras_catalog (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      unit_price INTEGER NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Per-bill extras. unit_price is snapshotted at bill time so historical
+    -- bills don't shift when the admin changes catalog prices later. We
+    -- denormalize the name too for the same reason.
+    CREATE TABLE IF NOT EXISTS bill_extras (
+      id TEXT PRIMARY KEY,
+      bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+      extra_id TEXT,
+      name TEXT NOT NULL,
+      qty INTEGER NOT NULL,
+      unit_price INTEGER NOT NULL,
+      total INTEGER NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_bill_extras_bill ON bill_extras(bill_id);
   `);
 
   // Migration: rename role 'owner' → 'admin'. SQLite can't ALTER a CHECK
@@ -234,7 +259,8 @@ export type AuditAction =
   | 'restore'
   | 'integrity_check'
   | 'cash_count'
-  | 'printer_test';
+  | 'printer_test'
+  | 'extras_change';
 
 export function writeAudit(entry: {
   actorUserId?: string | null;

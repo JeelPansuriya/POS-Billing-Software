@@ -3,6 +3,13 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { getDb } from './db';
 
+type BillExtra = {
+  name: string;
+  qty: number;
+  unitPrice: number;
+  total: number;
+};
+
 type Bill = {
   id: string;
   tokenNo: number;
@@ -16,6 +23,7 @@ type Bill = {
   restaurantAddress: string;
   restaurantMobile: string;
   restaurantInsta: string;
+  extras: BillExtra[];
 };
 
 function escapeHtml(s: string): string {
@@ -68,17 +76,26 @@ function customerSlipHtml(bill: Bill): string {
       <th style="text-align:right;font-size:11px;width:22%;padding-right:12px;">Price</th>
       <th style="text-align:right;font-size:11px;width:28%;padding-right:16px;">Amount</th>
     </tr></thead>
-    <tbody><tr>
-      <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">1 THALI</td>
-      <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${bill.plates}</td>
-      <td style="text-align:right;font-size:11px;padding-right:12px;">${bill.pricePerPlate}.00</td>
-      <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${bill.total}.00</td>
-    </tr></tbody>
+    <tbody>
+      <tr>
+        <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">1. THALI</td>
+        <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${bill.plates}</td>
+        <td style="text-align:right;font-size:11px;font-weight:bold;padding-right:12px;">${bill.pricePerPlate}.00</td>
+        <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${bill.plates * bill.pricePerPlate}.00</td>
+      </tr>
+      ${bill.extras.map((x, i) => `
+      <tr>
+        <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">${i + 2}. ${escapeHtml(x.name.toUpperCase())}</td>
+        <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${x.qty}</td>
+        <td style="text-align:right;font-size:11px;font-weight:bold;padding-right:12px;">${x.unitPrice}.00</td>
+        <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${x.total}.00</td>
+      </tr>`).join('')}
+    </tbody>
   </table>
   <div class="hr"></div>
   <table>
     <tr>
-      <td style="text-align:left;font-size:11px;">Total Qty: ${bill.plates}</td>
+      <td style="text-align:left;font-size:11px;">Total Qty: ${bill.plates + bill.extras.reduce((s, x) => s + x.qty, 0)}</td>
       <td style="text-align:right;font-size:11px;font-weight:bold;">Sub Total ${bill.total}.00</td>
     </tr>
   </table>
@@ -117,12 +134,21 @@ function managerSlipHtml(bill: Bill): string {
       <th style="text-align:right;font-size:11px;width:20%;padding-right:12px;">QTY</th>
       <th style="text-align:right;font-size:11px;width:30%;padding-right:16px;">Amount</th>
     </tr></thead>
-    <tbody><tr>
-      <td style="text-align:left;font-size:12px;padding-right:12px;">1</td>
-      <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">THALI</td>
-      <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${bill.plates}</td>
-      <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${bill.total}.00</td>
-    </tr></tbody>
+    <tbody>
+      <tr>
+        <td style="text-align:left;font-size:12px;padding-right:12px;">1</td>
+        <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">THALI</td>
+        <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${bill.plates}</td>
+        <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${bill.plates * bill.pricePerPlate}.00</td>
+      </tr>
+      ${bill.extras.map((x, i) => `
+      <tr>
+        <td style="text-align:left;font-size:12px;padding-right:12px;">${i + 2}</td>
+        <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">${escapeHtml(x.name.toUpperCase())}</td>
+        <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${x.qty}</td>
+        <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${x.total}.00</td>
+      </tr>`).join('')}
+    </tbody>
   </table>
   <div class="hr"></div>
   <div class="full" style="font-weight:bold;text-align:center;font-size:14px;padding:4px 0;">TOTAL Rs.${bill.total} - ${bill.paymentMode.toUpperCase()}</div>
@@ -165,19 +191,33 @@ function loadSettings() {
 
 function loadSampleBill(): Bill {
   const s = loadSettings();
+  // Include 1-2 sample extras when the catalog has any, so the layout shows
+  // the multi-row item table by default.
+  const sampleExtras = (getDb()
+    .prepare(
+      'SELECT name, unit_price as unitPrice FROM extras_catalog WHERE active = 1 ORDER BY sort_order, name LIMIT 2'
+    )
+    .all() as Array<{ name: string; unitPrice: number }>).map((x, i) => ({
+    name: x.name,
+    qty: i + 1,
+    unitPrice: x.unitPrice,
+    total: x.unitPrice * (i + 1),
+  }));
+  const extrasTotal = sampleExtras.reduce((s, x) => s + x.total, 0);
   return {
     id: 'sample',
     tokenNo: 183,
     plates: 4,
     mealType: 'dinner',
     pricePerPlate: 120,
-    total: 480,
+    total: 480 + extrasTotal,
     paymentMode: 'cash',
     createdAt: new Date().toISOString(),
     restaurantName: s.name,
     restaurantAddress: s.address,
     restaurantMobile: s.mobile,
     restaurantInsta: s.insta,
+    extras: sampleExtras,
   };
 }
 
@@ -201,6 +241,11 @@ function loadRealBill(billId: string): Bill | null {
     | undefined;
   if (!row) return null;
   const s = loadSettings();
+  const extras = getDb()
+    .prepare(
+      'SELECT name, qty, unit_price as unitPrice, total FROM bill_extras WHERE bill_id = ? ORDER BY sort_order, name'
+    )
+    .all(row.id) as Array<{ name: string; qty: number; unitPrice: number; total: number }>;
   return {
     id: row.id,
     tokenNo: row.token_no,
@@ -214,6 +259,7 @@ function loadRealBill(billId: string): Bill | null {
     restaurantAddress: s.address,
     restaurantMobile: s.mobile,
     restaurantInsta: s.insta,
+    extras,
   };
 }
 
