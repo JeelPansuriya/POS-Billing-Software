@@ -6,6 +6,7 @@ type Extra = {
   unitPrice: number;
   active: number;
   sortOrder: number;
+  shortcutKey: string | null;
 };
 
 type Draft = {
@@ -14,6 +15,7 @@ type Draft = {
   unitPrice: string;
   active: boolean;
   sortOrder: number;
+  shortcutKey: string;
 };
 
 const emptyDraft = (sortOrder: number): Draft => ({
@@ -21,6 +23,7 @@ const emptyDraft = (sortOrder: number): Draft => ({
   unitPrice: '',
   active: true,
   sortOrder,
+  shortcutKey: '',
 });
 
 export default function MenuPage() {
@@ -52,6 +55,7 @@ export default function MenuPage() {
       unitPrice: String(it.unitPrice),
       active: !!it.active,
       sortOrder: it.sortOrder,
+      shortcutKey: it.shortcutKey ?? '',
     });
 
   const save = async () => {
@@ -67,6 +71,7 @@ export default function MenuPage() {
         unitPrice: price,
         active: draft.active,
         sortOrder: draft.sortOrder,
+        shortcutKey: draft.shortcutKey.trim().toUpperCase() || null,
       });
       if (r.ok) {
         flash(draft.id ? 'Updated' : 'Added');
@@ -98,6 +103,7 @@ export default function MenuPage() {
       unitPrice: it.unitPrice,
       active: !it.active,
       sortOrder: it.sortOrder,
+      shortcutKey: it.shortcutKey,
     });
     if (r.ok) await load();
     else flash(r.error, 'err');
@@ -136,6 +142,7 @@ export default function MenuPage() {
               <tr>
                 <th className="px-4 py-3 text-left">Name</th>
                 <th className="px-4 py-3 text-right">Price</th>
+                <th className="px-4 py-3 text-center">Shortcut</th>
                 <th className="px-4 py-3 text-center">Active</th>
                 <th className="px-4 py-3 text-right">Order</th>
                 <th className="px-4 py-3"></th>
@@ -144,7 +151,7 @@ export default function MenuPage() {
             <tbody>
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-gray-400">
+                  <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
                     No items yet. Click <strong>+ Add item</strong> to start.
                   </td>
                 </tr>
@@ -153,6 +160,15 @@ export default function MenuPage() {
                 <tr key={it.id} className="border-t">
                   <td className="px-4 py-2 font-medium">{it.name}</td>
                   <td className="px-4 py-2 text-right tabular-nums">₹{it.unitPrice}</td>
+                  <td className="px-4 py-2 text-center">
+                    {it.shortcutKey ? (
+                      <kbd className="px-2 py-0.5 rounded bg-gray-100 border border-gray-300 text-xs font-mono font-bold">
+                        {it.shortcutKey}
+                      </kbd>
+                    ) : (
+                      <span className="text-xs text-gray-400">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-2 text-center">
                     <button
                       onClick={() => toggleActive(it)}
@@ -209,6 +225,25 @@ export default function MenuPage() {
                   onChange={(e) => setDraft({ ...draft, unitPrice: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 />
+              </div>
+              <div>
+                <label className="block text-xs uppercase text-gray-500 mb-1">
+                  Keyboard shortcut (single letter, optional)
+                </label>
+                <input
+                  type="text"
+                  maxLength={1}
+                  value={draft.shortcutKey}
+                  onChange={(e) =>
+                    setDraft({ ...draft, shortcutKey: e.target.value.toUpperCase() })
+                  }
+                  className="w-20 px-3 py-2 border border-gray-300 rounded-lg text-center font-mono uppercase"
+                  placeholder="R"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  T, C, U are reserved (Thali, Cash, UPI). On the Billing page, press this letter
+                  then a number to set quantity. Leave blank to skip.
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

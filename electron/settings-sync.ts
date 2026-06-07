@@ -119,7 +119,7 @@ export async function pushExtrasCatalog(): Promise<void> {
   try {
     const rows = getDb()
       .prepare(
-        'SELECT id, name, unit_price, active, sort_order FROM extras_catalog ORDER BY sort_order, name'
+        'SELECT id, name, unit_price, active, sort_order, shortcut_key FROM extras_catalog ORDER BY sort_order, name'
       )
       .all() as Array<{
       id: string;
@@ -127,6 +127,7 @@ export async function pushExtrasCatalog(): Promise<void> {
       unit_price: number;
       active: number;
       sort_order: number;
+      shortcut_key: string | null;
     }>;
     await pushSetting('extras_catalog', JSON.stringify(rows));
   } catch (err) {
@@ -200,15 +201,23 @@ function applyRemoteSetting(key: string, value: string) {
         unit_price: number;
         active: number;
         sort_order: number;
+        shortcut_key?: string | null;
       }>;
       const tx = getDb().transaction(() => {
         getDb().prepare('DELETE FROM extras_catalog').run();
         const ins = getDb().prepare(
-          `INSERT INTO extras_catalog (id, name, unit_price, active, sort_order)
-           VALUES (?, ?, ?, ?, ?)`
+          `INSERT INTO extras_catalog (id, name, unit_price, active, sort_order, shortcut_key)
+           VALUES (?, ?, ?, ?, ?, ?)`
         );
         for (const r of incoming) {
-          ins.run(r.id, r.name, r.unit_price, r.active ? 1 : 0, r.sort_order);
+          ins.run(
+            r.id,
+            r.name,
+            r.unit_price,
+            r.active ? 1 : 0,
+            r.sort_order,
+            r.shortcut_key ?? null
+          );
         }
       });
       tx();

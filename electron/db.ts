@@ -83,6 +83,7 @@ export function initDb() {
       unit_price INTEGER NOT NULL,
       active INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      shortcut_key TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -131,6 +132,14 @@ export function initDb() {
       DROP TABLE users_old;
       COMMIT;
     `);
+  }
+
+  // Migration: add shortcut_key to extras_catalog on installs that pre-date it.
+  const extrasCols = db
+    .prepare(`PRAGMA table_info(extras_catalog)`)
+    .all() as Array<{ name: string }>;
+  if (!extrasCols.some((c) => c.name === 'shortcut_key')) {
+    db.exec(`ALTER TABLE extras_catalog ADD COLUMN shortcut_key TEXT`);
   }
 
   // Migration: add void columns if missing on an older bills table.

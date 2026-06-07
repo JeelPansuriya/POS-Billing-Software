@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
 
+type MealBreakdown = {
+  bills: number;
+  plates: number;
+  plateRevenue: number;
+  revenue: number;
+  extras: Array<{ name: string; qty: number; revenue: number }>;
+};
+
 type Summary = {
   day: string;
   totalBills: number;
@@ -13,6 +21,9 @@ type Summary = {
   dinnerRevenue: number;
   cashRevenue: number;
   upiRevenue: number;
+  lunch: MealBreakdown;
+  dinner: MealBreakdown;
+  extras: Array<{ name: string; qty: number; revenue: number }>;
 };
 
 export default function DaySummaryModal({ onClose }: { onClose: () => void }) {
@@ -76,12 +87,8 @@ export default function DaySummaryModal({ onClose }: { onClose: () => void }) {
             />
             <Stat label="Plates sold" value={`${data.totalPlates}`} />
 
-            <div className="border-t pt-4">
-              <Row label="Lunch plates" value={`${data.lunchPlates}`} />
-              <Row label="Lunch revenue" value={`₹${data.lunchRevenue.toLocaleString()}`} />
-              <Row label="Dinner plates" value={`${data.dinnerPlates}`} />
-              <Row label="Dinner revenue" value={`₹${data.dinnerRevenue.toLocaleString()}`} />
-            </div>
+            <MealSection label="Lunch" emoji="☀" m={data.lunch} accent="yellow" />
+            <MealSection label="Dinner" emoji="☾" m={data.dinner} accent="indigo" />
 
             <div className="border-t pt-4">
               <Row
@@ -179,6 +186,56 @@ function Row({
     <div className="flex items-center justify-between py-1">
       <span className="text-sm text-gray-600">{label}</span>
       <span className={`text-base font-semibold tabular-nums ${color}`}>{value}</span>
+    </div>
+  );
+}
+
+function MealSection({
+  label,
+  emoji,
+  m,
+  accent,
+}: {
+  label: string;
+  emoji: string;
+  m: MealBreakdown;
+  accent: 'yellow' | 'indigo';
+}) {
+  // Empty meals stay invisible — keeps the modal compact for restaurants that
+  // run a single sitting on some days.
+  if (m.bills === 0) return null;
+  const headerBg =
+    accent === 'yellow' ? 'bg-yellow-100 text-yellow-900' : 'bg-indigo-100 text-indigo-900';
+  return (
+    <div className="border-t pt-3">
+      <div
+        className={`flex items-center justify-between px-2 py-1 rounded-md font-semibold text-sm ${headerBg}`}
+      >
+        <span>
+          {emoji} {label}
+        </span>
+        <span className="tabular-nums">₹{m.revenue.toLocaleString()}</span>
+      </div>
+      <div className="mt-2 px-2">
+        {m.plates > 0 && (
+          <div className="flex items-baseline gap-2 py-1 text-sm">
+            <span className="font-medium flex-1">Thali</span>
+            <span className="text-gray-500 tabular-nums">{m.plates}</span>
+            <span className="font-semibold tabular-nums w-20 text-right">
+              ₹{m.plateRevenue.toLocaleString()}
+            </span>
+          </div>
+        )}
+        {m.extras.map((x) => (
+          <div key={x.name} className="flex items-baseline gap-2 py-1 text-sm">
+            <span className="font-medium flex-1">{x.name}</span>
+            <span className="text-gray-500 tabular-nums">{x.qty}</span>
+            <span className="font-semibold tabular-nums w-20 text-right">
+              ₹{x.revenue.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

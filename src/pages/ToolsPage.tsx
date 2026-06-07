@@ -83,6 +83,13 @@ export default function ToolsPage() {
   };
 
   // Day summary by date — pick any past day, view stats, optionally reprint.
+  type MealBreakdown = {
+    bills: number;
+    plates: number;
+    plateRevenue: number;
+    revenue: number;
+    extras: Array<{ name: string; qty: number; revenue: number }>;
+  };
   type DaySummary = {
     day: string;
     totalBills: number;
@@ -96,6 +103,9 @@ export default function ToolsPage() {
     dinnerRevenue: number;
     cashRevenue: number;
     upiRevenue: number;
+    lunch: MealBreakdown;
+    dinner: MealBreakdown;
+    extras: Array<{ name: string; qty: number; revenue: number }>;
   };
   const todayIso = (() => {
     const d = new Date();
@@ -366,34 +376,28 @@ export default function ToolsPage() {
             </button>
           </div>
           {summaryData && (
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm bg-gray-50 rounded-lg border border-gray-200 p-4">
-              <SummaryRow label="Tokens issued" value={`${summaryData.totalBills}`} />
-              <SummaryRow
-                label="Token range"
-                value={
-                  summaryData.firstToken && summaryData.lastToken
-                    ? `#${summaryData.firstToken} – #${summaryData.lastToken}`
-                    : '—'
-                }
-              />
-              <SummaryRow label="Plates sold" value={`${summaryData.totalPlates}`} />
-              <SummaryRow
-                label="Total revenue"
-                value={`₹${summaryData.totalRevenue.toLocaleString()}`}
-                accent
-              />
-              <SummaryRow label="Lunch plates" value={`${summaryData.lunchPlates}`} />
-              <SummaryRow
-                label="Lunch revenue"
-                value={`₹${summaryData.lunchRevenue.toLocaleString()}`}
-              />
-              <SummaryRow label="Dinner plates" value={`${summaryData.dinnerPlates}`} />
-              <SummaryRow
-                label="Dinner revenue"
-                value={`₹${summaryData.dinnerRevenue.toLocaleString()}`}
-              />
-              <SummaryRow label="Cash" value={`₹${summaryData.cashRevenue.toLocaleString()}`} />
-              <SummaryRow label="UPI" value={`₹${summaryData.upiRevenue.toLocaleString()}`} />
+            <div className="bg-gray-50 rounded-lg border border-gray-200 p-4 space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+                <SummaryRow label="Tokens issued" value={`${summaryData.totalBills}`} />
+                <SummaryRow
+                  label="Token range"
+                  value={
+                    summaryData.firstToken && summaryData.lastToken
+                      ? `#${summaryData.firstToken} – #${summaryData.lastToken}`
+                      : '—'
+                  }
+                />
+                <SummaryRow label="Plates sold" value={`${summaryData.totalPlates}`} />
+                <SummaryRow
+                  label="Total revenue"
+                  value={`₹${summaryData.totalRevenue.toLocaleString()}`}
+                  accent
+                />
+                <SummaryRow label="Cash" value={`₹${summaryData.cashRevenue.toLocaleString()}`} />
+                <SummaryRow label="UPI" value={`₹${summaryData.upiRevenue.toLocaleString()}`} />
+              </div>
+              <ToolsMealSection label="Lunch" emoji="☀" m={summaryData.lunch} />
+              <ToolsMealSection label="Dinner" emoji="☾" m={summaryData.dinner} />
             </div>
           )}
           {summaryData && summaryData.totalBills === 0 && (
@@ -646,6 +650,54 @@ function SummaryRow({
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+function ToolsMealSection({
+  label,
+  emoji,
+  m,
+}: {
+  label: string;
+  emoji: string;
+  m: {
+    bills: number;
+    plates: number;
+    plateRevenue: number;
+    revenue: number;
+    extras: Array<{ name: string; qty: number; revenue: number }>;
+  };
+}) {
+  if (m.bills === 0) return null;
+  return (
+    <div className="border-t border-gray-200 pt-3">
+      <div className="flex items-center justify-between font-semibold text-gray-800 mb-1">
+        <span>
+          {emoji} {label}
+        </span>
+        <span className="tabular-nums">₹{m.revenue.toLocaleString()}</span>
+      </div>
+      <div className="ml-4 space-y-0.5">
+        {m.plates > 0 && (
+          <div className="flex items-baseline gap-2">
+            <span className="text-gray-700 flex-1">Thali</span>
+            <span className="text-gray-500 tabular-nums">{m.plates}</span>
+            <span className="font-semibold tabular-nums w-20 text-right">
+              ₹{m.plateRevenue.toLocaleString()}
+            </span>
+          </div>
+        )}
+        {m.extras.map((x) => (
+          <div key={x.name} className="flex items-baseline gap-2">
+            <span className="text-gray-700 flex-1">{x.name}</span>
+            <span className="text-gray-500 tabular-nums">{x.qty}</span>
+            <span className="font-semibold tabular-nums w-20 text-right">
+              ₹{x.revenue.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

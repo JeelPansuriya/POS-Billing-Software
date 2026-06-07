@@ -20,11 +20,25 @@ const api = {
   extras: {
     list: () =>
       ipcRenderer.invoke('extras:list') as Promise<
-        Array<{ id: string; name: string; unitPrice: number; active: number; sortOrder: number }>
+        Array<{
+          id: string;
+          name: string;
+          unitPrice: number;
+          active: number;
+          sortOrder: number;
+          shortcutKey: string | null;
+        }>
       >,
     listAll: () =>
       ipcRenderer.invoke('extras:listAll') as Promise<
-        Array<{ id: string; name: string; unitPrice: number; active: number; sortOrder: number }>
+        Array<{
+          id: string;
+          name: string;
+          unitPrice: number;
+          active: number;
+          sortOrder: number;
+          shortcutKey: string | null;
+        }>
       >,
     upsert: (payload: {
       id?: string;
@@ -32,6 +46,7 @@ const api = {
       unitPrice: number;
       active: boolean;
       sortOrder: number;
+      shortcutKey?: string | null;
     }) =>
       ipcRenderer.invoke('extras:upsert', payload) as Promise<
         { ok: true; id: string } | { ok: false; error: string }
@@ -229,6 +244,21 @@ const api = {
         dinnerRevenue: number;
         cashRevenue: number;
         upiRevenue: number;
+        lunch: {
+          bills: number;
+          plates: number;
+          plateRevenue: number;
+          revenue: number;
+          extras: Array<{ name: string; qty: number; revenue: number }>;
+        };
+        dinner: {
+          bills: number;
+          plates: number;
+          plateRevenue: number;
+          revenue: number;
+          extras: Array<{ name: string; qty: number; revenue: number }>;
+        };
+        extras: Array<{ name: string; qty: number; revenue: number }>;
       }>,
     print: (dayIso?: string) =>
       ipcRenderer.invoke('day:print', dayIso) as Promise<{

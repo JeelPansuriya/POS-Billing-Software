@@ -768,9 +768,17 @@ export async function printTest() {
 
 // ----- Day summary (Z-report) ------------------------------------------------
 
+type MealBreakdown = {
+  bills: number;
+  plates: number;
+  plateRevenue: number;
+  revenue: number;
+  extras: Array<{ name: string; qty: number; revenue: number }>;
+};
+
 export type DaySummary = {
   restaurantName: string;
-  dayLabel: string; // e.g. "27/05/2026"
+  dayLabel: string;
   totalBills: number;
   totalPlates: number;
   totalRevenue: number;
@@ -782,6 +790,11 @@ export type DaySummary = {
   upiRevenue: number;
   firstToken: number | null;
   lastToken: number | null;
+  // Rich per-meal item breakdown — Thali plus every extra sold for that meal.
+  lunch: MealBreakdown;
+  dinner: MealBreakdown;
+  // Cross-meal extras roll-up for the slip footer.
+  extras: Array<{ name: string; qty: number; revenue: number }>;
 };
 
 export async function printDaySummary(s: DaySummary) {
@@ -790,32 +803,164 @@ export async function printDaySummary(s: DaySummary) {
       | { value: string }
       | undefined)?.value ?? '';
 
-  const row = (label: string, value: string) => ({
-    type: 'table' as const,
-    style: { width: '100%', borderCollapse: 'collapse', margin: '0', padding: '0' },
-    tableHeader: [],
-    tableBody: [
-      [
-        {
-          type: 'text' as const,
-          value: label,
-          style: { textAlign: 'left', fontSize: '12px', padding: '0', margin: '0' },
-        },
-        {
-          type: 'text' as const,
-          value: `${value}${NBSP}${NBSP}${NBSP}${NBSP}${NBSP}`,
-          style: {
-            textAlign: 'right',
-            fontWeight: 'bold',
-            fontSize: '12px',
-            padding: '0',
-            margin: '0',
+  // Two-column label/value row, right-aligned value with the same 16px right
+  // padding that the bill's Sub Total uses, so columns align across slips.
+  const infoRow = (label: string, value: string, opts: { boldLabel?: boolean } = {}) =>
+    ({
+      type: 'table' as const,
+      style: tableStyle,
+      tableHeader: [],
+      tableBody: [
+        [
+          {
+            type: 'text' as const,
+            value: label,
+            style: {
+              textAlign: 'left' as const,
+              fontSize: '11px',
+              fontWeight: opts.boldLabel ? ('bold' as const) : ('normal' as const),
+              padding: '0',
+              margin: '0',
+            },
           },
-        },
+          {
+            type: 'text' as const,
+            value,
+            style: {
+              textAlign: 'right' as const,
+              fontWeight: 'bold' as const,
+              fontSize: '11px',
+              padding: '0 16px 0 0',
+              margin: '0',
+            },
+          },
+        ],
       ],
-    ],
-    tableFooter: [],
+      tableFooter: [],
+    });
+
+  // 4-column item table (SNo / Item / QTY / Amount) — same shape as the
+  // manager copy on each bill. Headers + body rows.
+  const itemTableHeader: PosPrintTableField[] = [
+    {
+      type: 'text',
+      value: 'SNo',
+      style: {
+        textAlign: 'left',
+        fontSize: '11px',
+        fontWeight: 'bold',
+        width: '12%',
+        paddingRight: '12px',
+      },
+    },
+    {
+      type: 'text',
+      value: 'Item',
+      style: {
+        textAlign: 'left',
+        fontSize: '11px',
+        fontWeight: 'bold',
+        width: '38%',
+        paddingRight: '12px',
+      },
+    },
+    {
+      type: 'text',
+      value: 'QTY',
+      style: {
+        textAlign: 'right',
+        fontSize: '11px',
+        fontWeight: 'bold',
+        width: '20%',
+        paddingRight: '12px',
+      },
+    },
+    {
+      type: 'text',
+      value: 'Amount',
+      style: {
+        textAlign: 'right',
+        fontSize: '11px',
+        fontWeight: 'bold',
+        width: '30%',
+        paddingRight: '16px',
+      },
+    },
+  ];
+
+  const itemRow = (sno: number, name: string, qty: number, amount: number): PosPrintTableField[] => [
+    {
+      type: 'text',
+      value: `${sno}`,
+      style: { textAlign: 'left', fontSize: '11px', padding: '2px 12px 2px 0' },
+    },
+    {
+      type: 'text',
+      value: name,
+      style: {
+        textAlign: 'left',
+        fontSize: '12px',
+        fontWeight: 'bold',
+        padding: '2px 12px 2px 0',
+      },
+    },
+    {
+      type: 'text',
+      value: `${qty}`,
+      style: {
+        textAlign: 'right',
+        fontSize: '13px',
+        fontWeight: 'bold',
+        padding: '2px 12px 2px 0',
+      },
+    },
+    {
+      type: 'text',
+      value: `Rs.${amount}`,
+      style: {
+        textAlign: 'right',
+        fontSize: '11px',
+        fontWeight: 'bold',
+        padding: '2px 16px 2px 0',
+      },
+    },
+  ];
+
+  const sectionHeader = (title: string): PosPrintData => ({
+    type: 'text',
+    value: title,
+    style: {
+      ...fullWidth,
+      fontWeight: 'bold',
+      textAlign: 'left',
+      fontSize: '13px',
+      lineHeight: '1.3',
+    },
   });
+
+  // Per-meal block: section header → 4-col item table → meal subtotal row.
+  // Returns an empty list when the meal has no bills so the slip stays compact.
+  const mealBlock = (label: 'LUNCH' | 'DINNER', m: MealBreakdown): PosPrintData[] => {
+    if (m.bills === 0) return [];
+    const body: PosPrintTableField[][] = [];
+    let n = 1;
+    if (m.plates > 0) body.push(itemRow(n++, 'THALI', m.plates, m.plateRevenue));
+    for (const x of m.extras) body.push(itemRow(n++, x.name.toUpperCase(), x.qty, x.revenue));
+    return [
+      sectionHeader(label),
+      {
+        type: 'table',
+        style: tableStyle,
+        tableHeader: itemTableHeader,
+        tableBody: body,
+        tableFooter: [],
+      },
+      infoRow(`${label === 'LUNCH' ? 'Lunch' : 'Dinner'} total`, `Rs.${m.revenue}`, {
+        boldLabel: true,
+      }),
+      hr(),
+    ];
+  };
 
   const data: PosPrintData[] = [
     {
@@ -825,8 +970,8 @@ export async function printDaySummary(s: DaySummary) {
         ...fullWidth,
         fontWeight: 'bold',
         textAlign: 'center',
-        fontSize: '16px',
-        lineHeight: '1.1',
+        fontSize: '17px',
+        lineHeight: '1.15',
       },
     },
     {
@@ -836,7 +981,7 @@ export async function printDaySummary(s: DaySummary) {
         ...fullWidth,
         fontWeight: 'bold',
         textAlign: 'center',
-        fontSize: '14px',
+        fontSize: '13px',
         lineHeight: '1.2',
       },
     },
@@ -847,37 +992,22 @@ export async function printDaySummary(s: DaySummary) {
         ...fullWidth,
         textAlign: 'center',
         fontSize: '11px',
-        lineHeight: '1.2',
-        marginBottom: '6px',
+        lineHeight: '1.3',
       },
     },
-    row('Tokens issued', `${s.totalBills}`),
-    row(
+    hr(),
+    infoRow('Tokens issued', `${s.totalBills}`),
+    infoRow(
       'Token range',
-      s.firstToken && s.lastToken ? `#${s.firstToken} – #${s.lastToken}` : '—'
+      s.firstToken && s.lastToken ? `#${s.firstToken} - #${s.lastToken}` : '-'
     ),
-    row('Plates sold', `${s.totalPlates}`),
-    {
-      type: 'text',
-      value: ' ',
-      style: { ...fullWidth, fontSize: '6px', height: '6px', lineHeight: '6px' },
-    },
-    row('Lunch plates', `${s.lunchPlates}`),
-    row('Lunch revenue', `Rs.${s.lunchRevenue}`),
-    row('Dinner plates', `${s.dinnerPlates}`),
-    row('Dinner revenue', `Rs.${s.dinnerRevenue}`),
-    {
-      type: 'text',
-      value: ' ',
-      style: { ...fullWidth, fontSize: '6px', height: '6px', lineHeight: '6px' },
-    },
-    row('Cash', `Rs.${s.cashRevenue}`),
-    row('UPI', `Rs.${s.upiRevenue}`),
-    {
-      type: 'text',
-      value: ' ',
-      style: { ...fullWidth, fontSize: '6px', height: '6px', lineHeight: '6px' },
-    },
+    infoRow('Plates sold', `${s.totalPlates}`),
+    hr(),
+    ...mealBlock('LUNCH', s.lunch),
+    ...mealBlock('DINNER', s.dinner),
+    infoRow('Cash', `Rs.${s.cashRevenue}`),
+    infoRow('UPI', `Rs.${s.upiRevenue}`),
+    hr(),
     {
       type: 'text',
       value: `TOTAL Rs.${s.totalRevenue}`,
@@ -885,26 +1015,17 @@ export async function printDaySummary(s: DaySummary) {
         ...fullWidth,
         fontWeight: 'bold',
         textAlign: 'center',
-        fontSize: '20px',
-        lineHeight: '1.2',
+        fontSize: '17px',
+        lineHeight: '1.3',
+        padding: '4px 0',
       },
     },
-    {
-      type: 'text',
-      value: '.',
-      style: {
-        ...fullWidth,
-        color: 'white',
-        fontSize: '30px',
-        lineHeight: '30px',
-        height: '30px',
-      },
-    },
+    cutLine(),
   ];
 
   const options: PosPrintOptions = {
     preview: false,
-    margin: '0 0 30px 0',
+    margin: '0',
     copies: 1,
     printerName: printerName || undefined,
     timeOutPerLine: 400,

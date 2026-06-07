@@ -313,7 +313,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
   ipcMain.handle('extras:list', () => {
     return getDb()
       .prepare(
-        'SELECT id, name, unit_price as unitPrice, active, sort_order as sortOrder FROM extras_catalog WHERE active = 1 ORDER BY sort_order, name'
+        'SELECT id, name, unit_price as unitPrice, active, sort_order as sortOrder, shortcut_key as shortcutKey FROM extras_catalog WHERE active = 1 ORDER BY sort_order, name'
       )
       .all();
   });
@@ -322,7 +322,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
   ipcMain.handle('extras:listAll', () => {
     return getDb()
       .prepare(
-        'SELECT id, name, unit_price as unitPrice, active, sort_order as sortOrder FROM extras_catalog ORDER BY sort_order, name'
+        'SELECT id, name, unit_price as unitPrice, active, sort_order as sortOrder, shortcut_key as shortcutKey FROM extras_catalog ORDER BY sort_order, name'
       )
       .all();
   });
@@ -331,61 +331,121 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     'extras:upsert',
     (
       _e,
-      payload: { id?: string; name: string; unitPrice: number; active: boolean; sortOrder: number }
+      payload: {
+        id?: string;
+        name: string;
+        unitPrice: number;
+        active: boolean;
+        sortOrder: number;
+        shortcutKey?: string | null;
+      }
     ) => {
       const name = payload.name.trim();
       if (!name) return { ok: false, error: 'Name required' };
       if (!Number.isFinite(payload.unitPrice) || payload.unitPrice <= 0) {
         return { ok: false, error: 'Price must be a positive number' };
       }
+      // Normalize shortcut: uppercase single letter, or null. Reserve T (Thali),
+      // C (Cash), U (UPI) — those map to fixed actions on the Billing page.
+      let shortcutKey: string | null = null;
+      const raw = (payload.shortcutKey ?? '').trim().toUpperCase();
+      if (raw) {
+        if (!/^[A-Z]$/.test(raw)) {
+          return { ok: false, error: 'Shortcut must be a single letter A-Z' };
+        }
+        if (raw === 'T' || raw === 'C' || raw === 'U') {
+          return { ok: false, error: `"${raw}" is reserved (T=Thali, C=Cash, U=UPI)` };
+        }
+        // Reject if another active item already uses that letter.
+        const conflict = getDb()
+          .prepare(
+            'SELECT id FROM extras_catalog WHERE shortcut_key = ? AND active = 1 AND id != ?'
+          )
+          .get(raw, payload.id ?? '') as { id: string } | undefined;
+        if (conflict) {
+          return { ok: false, error: `Shortcut "${raw}" is already used by another active item` };
+        }
+        shortcutKey = raw;
+      }
       const isUpdate = !!payload.id;
       const id = payload.id ?? randomUUID();
       try {
         if (isUpdate) {
           const prev = getDb()
-            .prepare('SELECT name, unit_price, active FROM extras_catalog WHERE id = ?')
+            .prepare('SELECT name, unit_price, active, shortcut_key FROM extras_catalog WHERE id = ?')
             .get(id) as
-            | { name: string; unit_price: number; active: number }
+            | { name: string; unit_price: number; active: number; shortcut_key: string | null }
             | undefined;
           if (!prev) return { ok: false, error: 'Item not found' };
           getDb()
             .prepare(
               `UPDATE extras_catalog
-                  SET name = ?, unit_price = ?, active = ?, sort_order = ?, updated_at = datetime('now')
+                  SET name = ?, unit_price = ?, active = ?, sort_order = ?, shortcut_key = ?, updated_at = datetime('now')
                 WHERE id = ?`
             )
-            .run(name, Math.round(payload.unitPrice), payload.active ? 1 : 0, payload.sortOrder, id);
+            .run(
+              name,
+              Math.round(payload.unitPrice),
+              payload.active ? 1 : 0,
+              payload.sortOrder,
+              shortcutKey,
+              id
+            );
           writeAudit({
             ...actorFields(),
             action: 'extras_change',
             entityType: 'extra',
             entityId: id,
             details: {
-              from: { name: prev.name, price: prev.unit_price, active: !!prev.active },
-              to: { name, price: payload.unitPrice, active: payload.active },
+              from: {
+                name: prev.name,
+                price: prev.unit_price,
+                active: !!prev.active,
+                shortcut: prev.shortcut_key,
+              },
+              to: {
+                name,
+                price: payload.unitPrice,
+                active: payload.active,
+                shortcut: shortcutKey,
+              },
             },
           });
         } else {
           getDb()
             .prepare(
-              `INSERT INTO extras_catalog (id, name, unit_price, active, sort_order)
-               VALUES (?, ?, ?, ?, ?)`
+              `INSERT INTO extras_catalog (id, name, unit_price, active, sort_order, shortcut_key)
+               VALUES (?, ?, ?, ?, ?, ?)`
             )
-            .run(id, name, Math.round(payload.unitPrice), payload.active ? 1 : 0, payload.sortOrder);
+            .run(
+              id,
+              name,
+              Math.round(payload.unitPrice),
+              payload.active ? 1 : 0,
+              payload.sortOrder,
+              shortcutKey
+            );
           writeAudit({
             ...actorFields(),
             action: 'extras_change',
             entityType: 'extra',
             entityId: id,
-            details: { created: { name, price: payload.unitPrice, active: payload.active } },
+            details: {
+              created: {
+                name,
+                price: payload.unitPrice,
+                active: payload.active,
+                shortcut: shortcutKey,
+              },
+            },
           });
         }
         pushExtrasCatalog().catch((e) => console.error('Push extras failed:', e));
         return { ok: true, id };
       } catch (err: any) {
-        // UNIQUE constraint violation on name — give a friendlier message.
         const msg = String(err?.message ?? err);
-        if (msg.includes('UNIQUE')) return { ok: false, error: 'An item with that name already exists' };
+        if (msg.includes('UNIQUE'))
+          return { ok: false, error: 'An item with that name already exists' };
         return { ok: false, error: msg };
       }
     }
@@ -698,18 +758,15 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
   });
 
   // ---- DAY SUMMARY (Z-report) ----
-  ipcMain.handle('day:summary', (_e, dayIso?: string) => {
-    // dayIso is the ISO date prefix YYYY-MM-DD (local) — defaults to today.
-    const day = dayIso ?? localISODate();
-
-    // localtime + voided_at filter mirrors day:print so the on-screen summary
-    // and the printed slip always agree. Without 'localtime' the date filter
-    // ran in UTC and rolled the day boundary 5h30m early in IST.
+  // Shared compute path so day:summary (modal/UI) and day:print (slip) can
+  // never disagree. Returns both the legacy flat fields and the richer
+  // per-meal item-level breakdown.
+  function computeDaySummary(day: string) {
     const totals = getDb()
       .prepare(
         `SELECT COUNT(*) as bills, COALESCE(SUM(plates), 0) as plates, COALESCE(SUM(total), 0) as revenue,
                 MIN(token_no) as first_token, MAX(token_no) as last_token
-         FROM bills
+           FROM bills
           WHERE date(created_at, 'localtime') = ?
             AND voided_at IS NULL`
       )
@@ -721,79 +778,113 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       last_token: number | null;
     };
 
+    // Per-meal aggregates: bills count, Thali plates, plate-only revenue,
+    // and full revenue (plates + extras for that meal).
     const meals = getDb()
       .prepare(
-        `SELECT meal_type, COALESCE(SUM(plates),0) as plates, COALESCE(SUM(total),0) as revenue
-         FROM bills
+        `SELECT meal_type,
+                COUNT(*) as bills,
+                COALESCE(SUM(plates),0) as plates,
+                COALESCE(SUM(plates * price_per_plate),0) as plate_revenue,
+                COALESCE(SUM(total),0) as total_revenue
+           FROM bills
           WHERE date(created_at, 'localtime') = ?
             AND voided_at IS NULL
           GROUP BY meal_type`
       )
-      .all(day) as Array<{ meal_type: 'lunch' | 'dinner'; plates: number; revenue: number }>;
+      .all(day) as Array<{
+      meal_type: 'lunch' | 'dinner';
+      bills: number;
+      plates: number;
+      plate_revenue: number;
+      total_revenue: number;
+    }>;
+
+    // Per-(meal × extra-name) aggregates. Bill extras snapshot name + price
+    // so the report stays correct even after admin renames an extra later.
+    const extrasByMeal = getDb()
+      .prepare(
+        `SELECT b.meal_type, be.name,
+                COALESCE(SUM(be.qty), 0) as qty,
+                COALESCE(SUM(be.total), 0) as revenue
+           FROM bill_extras be
+           JOIN bills b ON b.id = be.bill_id
+          WHERE date(b.created_at, 'localtime') = ?
+            AND b.voided_at IS NULL
+          GROUP BY b.meal_type, be.name
+          ORDER BY b.meal_type, be.name`
+      )
+      .all(day) as Array<{
+      meal_type: 'lunch' | 'dinner';
+      name: string;
+      qty: number;
+      revenue: number;
+    }>;
 
     const pays = getDb()
       .prepare(
         `SELECT payment_mode, COALESCE(SUM(total),0) as revenue
-         FROM bills
+           FROM bills
           WHERE date(created_at, 'localtime') = ?
             AND voided_at IS NULL
           GROUP BY payment_mode`
       )
       .all(day) as Array<{ payment_mode: 'cash' | 'upi'; revenue: number }>;
 
-    const summary = {
+    const buildMeal = (mt: 'lunch' | 'dinner') => {
+      const m = meals.find((x) => x.meal_type === mt);
+      return {
+        bills: m?.bills ?? 0,
+        plates: m?.plates ?? 0,
+        plateRevenue: m?.plate_revenue ?? 0,
+        revenue: m?.total_revenue ?? 0,
+        extras: extrasByMeal
+          .filter((x) => x.meal_type === mt)
+          .map((x) => ({ name: x.name, qty: x.qty, revenue: x.revenue })),
+      };
+    };
+
+    // Cross-meal extras roll-up — useful for a "totals across the day" row
+    // on the slip footer.
+    const extrasTotalsMap = new Map<string, { qty: number; revenue: number }>();
+    for (const x of extrasByMeal) {
+      const cur = extrasTotalsMap.get(x.name) ?? { qty: 0, revenue: 0 };
+      cur.qty += x.qty;
+      cur.revenue += x.revenue;
+      extrasTotalsMap.set(x.name, cur);
+    }
+    const extras = Array.from(extrasTotalsMap.entries())
+      .map(([name, v]) => ({ name, qty: v.qty, revenue: v.revenue }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
       day,
       totalBills: totals.bills,
       totalPlates: totals.plates,
       totalRevenue: totals.revenue,
       firstToken: totals.first_token,
       lastToken: totals.last_token,
-      lunchPlates: meals.find((m) => m.meal_type === 'lunch')?.plates ?? 0,
-      lunchRevenue: meals.find((m) => m.meal_type === 'lunch')?.revenue ?? 0,
-      dinnerPlates: meals.find((m) => m.meal_type === 'dinner')?.plates ?? 0,
-      dinnerRevenue: meals.find((m) => m.meal_type === 'dinner')?.revenue ?? 0,
+      // Legacy flat fields kept so older renderer code keeps working.
+      lunchPlates: buildMeal('lunch').plates,
+      lunchRevenue: buildMeal('lunch').revenue,
+      dinnerPlates: buildMeal('dinner').plates,
+      dinnerRevenue: buildMeal('dinner').revenue,
       cashRevenue: pays.find((p) => p.payment_mode === 'cash')?.revenue ?? 0,
       upiRevenue: pays.find((p) => p.payment_mode === 'upi')?.revenue ?? 0,
+      // Rich breakdown.
+      lunch: buildMeal('lunch'),
+      dinner: buildMeal('dinner'),
+      extras,
     };
-    return summary;
+  }
+
+  ipcMain.handle('day:summary', (_e, dayIso?: string) => {
+    return computeDaySummary(dayIso ?? localISODate());
   });
 
   ipcMain.handle('day:print', async (_e, dayIso?: string) => {
     const day = dayIso ?? localISODate();
-
-    const totals = getDb()
-      .prepare(
-        `SELECT COUNT(*) as bills, COALESCE(SUM(plates), 0) as plates, COALESCE(SUM(total), 0) as revenue,
-                MIN(token_no) as first_token, MAX(token_no) as last_token
-           FROM bills
-          WHERE date(created_at, 'localtime') = ?
-            AND voided_at IS NULL`
-      )
-      .get(day) as {
-      bills: number;
-      plates: number;
-      revenue: number;
-      first_token: number | null;
-      last_token: number | null;
-    };
-    const meals = getDb()
-      .prepare(
-        `SELECT meal_type, COALESCE(SUM(plates),0) as plates, COALESCE(SUM(total),0) as revenue
-           FROM bills
-          WHERE date(created_at, 'localtime') = ?
-            AND voided_at IS NULL
-          GROUP BY meal_type`
-      )
-      .all(day) as Array<{ meal_type: 'lunch' | 'dinner'; plates: number; revenue: number }>;
-    const pays = getDb()
-      .prepare(
-        `SELECT payment_mode, COALESCE(SUM(total),0) as revenue
-           FROM bills
-          WHERE date(created_at, 'localtime') = ?
-            AND voided_at IS NULL
-          GROUP BY payment_mode`
-      )
-      .all(day) as Array<{ payment_mode: 'cash' | 'upi'; revenue: number }>;
+    const s = computeDaySummary(day);
 
     const restaurantName =
       (getDb().prepare("SELECT value FROM settings WHERE key='restaurant_name'").get() as
@@ -813,17 +904,20 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       await printDaySummary({
         restaurantName,
         dayLabel,
-        totalBills: totals.bills,
-        totalPlates: totals.plates,
-        totalRevenue: totals.revenue,
-        firstToken: totals.first_token,
-        lastToken: totals.last_token,
-        lunchPlates: meals.find((m) => m.meal_type === 'lunch')?.plates ?? 0,
-        lunchRevenue: meals.find((m) => m.meal_type === 'lunch')?.revenue ?? 0,
-        dinnerPlates: meals.find((m) => m.meal_type === 'dinner')?.plates ?? 0,
-        dinnerRevenue: meals.find((m) => m.meal_type === 'dinner')?.revenue ?? 0,
-        cashRevenue: pays.find((p) => p.payment_mode === 'cash')?.revenue ?? 0,
-        upiRevenue: pays.find((p) => p.payment_mode === 'upi')?.revenue ?? 0,
+        totalBills: s.totalBills,
+        totalPlates: s.totalPlates,
+        totalRevenue: s.totalRevenue,
+        firstToken: s.firstToken,
+        lastToken: s.lastToken,
+        lunchPlates: s.lunchPlates,
+        lunchRevenue: s.lunchRevenue,
+        dinnerPlates: s.dinnerPlates,
+        dinnerRevenue: s.dinnerRevenue,
+        cashRevenue: s.cashRevenue,
+        upiRevenue: s.upiRevenue,
+        lunch: s.lunch,
+        dinner: s.dinner,
+        extras: s.extras,
       });
       result.printed = true;
     } catch (err: any) {
