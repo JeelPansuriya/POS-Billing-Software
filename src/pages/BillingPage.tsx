@@ -234,12 +234,29 @@ export default function BillingPage() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (showSummary || voidTarget) return;
+      // Skip when any modal is open — including the new EditBillModal whose
+      // inputs would otherwise have their letter keystrokes intercepted by
+      // the preventDefault() below.
+      if (showSummary || voidTarget || editTarget) return;
+      // Skip when the keystroke is going into ANY editable element. select
+      // is included because some option labels have letters that overlap
+      // with item shortcuts.
       const t = e.target as HTMLElement | null;
       if (t) {
         const tag = t.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable) return;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          t.isContentEditable
+        )
+          return;
       }
+      // Defensive: if the BillingPage isn't actually visible (route changed
+      // mid-update, listener still alive momentarily), skip too. This
+      // protects against typing into the Menu / Settings / Tools page
+      // inputs being swallowed by a stale listener.
+      if (!document.querySelector('[data-billing-page-active="true"]')) return;
 
       // SAVE: Ctrl+Enter (or Cmd+Enter on macOS) is the only way to submit.
       // Plain Enter just commits a pending qty without saving — protects
@@ -332,7 +349,7 @@ export default function BillingPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showSummary, voidTarget, pending, total, busy, items, itemQtyMap, mealType]);
+  }, [showSummary, voidTarget, editTarget, pending, total, busy, items, itemQtyMap, mealType]);
 
   // Pretty-print the pending state for the banner.
   const pendingLabel = useMemo(() => {
@@ -365,7 +382,7 @@ export default function BillingPage() {
   });
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" data-billing-page-active="true">
       {testMode && (
         <div className="bg-amber-500 text-white text-center py-2 text-sm font-semibold tracking-wide">
           🧪 TEST MODE — bills are NOT saved or synced. Printer test only.
