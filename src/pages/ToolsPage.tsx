@@ -88,15 +88,33 @@ export default function ToolsPage() {
   };
   const [cloudRestoring, setCloudRestoring] = useState(false);
   const runCloudRestore = async (mode: 'safe' | 'force') => {
-    const confirmText =
-      mode === 'safe'
-        ? 'Sync any pending local bills up to Supabase first, then REPLACE local DB with the cloud snapshot. Continue?'
-        : 'FORCE OVERWRITE — any local-only bills will be DESTROYED. Type OVERWRITE to confirm:';
+    // window.prompt() is disabled by default in Electron, so a typed-string
+    // confirmation step never returns. Two layered confirms instead — the
+    // second one explicitly states what gets destroyed, so a stray click
+    // can't slide through both.
     if (mode === 'safe') {
-      if (!confirm(confirmText)) return;
+      if (
+        !confirm(
+          'Sync any pending local bills up to Supabase first, then REPLACE local DB with the cloud snapshot.\n\nContinue?'
+        )
+      )
+        return;
     } else {
-      const ans = prompt(confirmText);
-      if (ans !== 'OVERWRITE') return;
+      if (
+        !confirm(
+          '⚠ FORCE OVERWRITE\n\n' +
+            'This will DELETE every local bill and item, then replace them with the Supabase snapshot.\n\n' +
+            'Any local-only bills (made offline since last successful sync) will be PERMANENTLY LOST.\n\n' +
+            'Click OK to proceed, or Cancel to abort.'
+        )
+      )
+        return;
+      if (
+        !confirm(
+          'Last chance — really overwrite the local DB with the cloud copy?\n\nClick OK to confirm.'
+        )
+      )
+        return;
     }
     setCloudRestoring(true);
     try {
