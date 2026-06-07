@@ -77,15 +77,9 @@ function customerSlipHtml(bill: Bill): string {
       <th style="text-align:right;font-size:11px;width:28%;padding-right:16px;">Amount</th>
     </tr></thead>
     <tbody>
-      <tr>
-        <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">1. THALI</td>
-        <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${bill.plates}</td>
-        <td style="text-align:right;font-size:11px;font-weight:bold;padding-right:12px;">${bill.pricePerPlate}.00</td>
-        <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${bill.plates * bill.pricePerPlate}.00</td>
-      </tr>
       ${bill.extras.map((x, i) => `
       <tr>
-        <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">${i + 2}. ${escapeHtml(x.name.toUpperCase())}</td>
+        <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">${i + 1}. ${escapeHtml(x.name.toUpperCase())}</td>
         <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${x.qty}</td>
         <td style="text-align:right;font-size:11px;font-weight:bold;padding-right:12px;">${x.unitPrice}.00</td>
         <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${x.total}.00</td>
@@ -95,7 +89,7 @@ function customerSlipHtml(bill: Bill): string {
   <div class="hr"></div>
   <table>
     <tr>
-      <td style="text-align:left;font-size:11px;">Total Qty: ${bill.plates + bill.extras.reduce((s, x) => s + x.qty, 0)}</td>
+      <td style="text-align:left;font-size:11px;">Total Qty: ${bill.extras.reduce((s, x) => s + x.qty, 0)}</td>
       <td style="text-align:right;font-size:11px;font-weight:bold;">Sub Total ${bill.total}.00</td>
     </tr>
   </table>
@@ -135,15 +129,9 @@ function managerSlipHtml(bill: Bill): string {
       <th style="text-align:right;font-size:11px;width:30%;padding-right:16px;">Amount</th>
     </tr></thead>
     <tbody>
-      <tr>
-        <td style="text-align:left;font-size:12px;padding-right:12px;">1</td>
-        <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">THALI</td>
-        <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${bill.plates}</td>
-        <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${bill.plates * bill.pricePerPlate}.00</td>
-      </tr>
       ${bill.extras.map((x, i) => `
       <tr>
-        <td style="text-align:left;font-size:12px;padding-right:12px;">${i + 2}</td>
+        <td style="text-align:left;font-size:12px;padding-right:12px;">${i + 1}</td>
         <td style="text-align:left;font-size:12px;font-weight:bold;padding-right:12px;">${escapeHtml(x.name.toUpperCase())}</td>
         <td style="text-align:right;font-size:14px;font-weight:bold;padding-right:12px;">${x.qty}</td>
         <td style="text-align:right;font-size:12px;font-weight:bold;padding-right:16px;">${x.total}.00</td>
@@ -243,7 +231,7 @@ function loadRealBill(billId: string): Bill | null {
   const s = loadSettings();
   const extras = getDb()
     .prepare(
-      'SELECT name, qty, unit_price as unitPrice, total FROM bill_extras WHERE bill_id = ? ORDER BY sort_order, name'
+      'SELECT name, qty, unit_price as unitPrice, total FROM bill_items WHERE bill_id = ? ORDER BY sort_order, name'
     )
     .all(row.id) as Array<{ name: string; qty: number; unitPrice: number; total: number }>;
   return {

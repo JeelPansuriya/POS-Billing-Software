@@ -43,8 +43,9 @@ export default function App() {
     }
     (async () => {
       const name = await window.api.settings.get('restaurant_name');
-      const prices = await window.api.prices.get();
-      const incomplete = !name || !name.trim() || prices.lunch <= 0 || prices.dinner <= 0;
+      // Onboarding only gates on restaurant name now. Pricing has moved to
+      // the Menu page, so we direct admin there explicitly after this step.
+      const incomplete = !name || !name.trim();
       setNeedsOnboarding(incomplete);
       setOnboardingChecked(true);
     })();

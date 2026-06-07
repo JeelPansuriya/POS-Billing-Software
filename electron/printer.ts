@@ -6,7 +6,7 @@ import {
 } from 'electron-pos-printer';
 import { getDb } from './db';
 
-type BillExtra = {
+type BillItem = {
   name: string;
   qty: number;
   unitPrice: number;
@@ -16,14 +16,21 @@ type BillExtra = {
 type Bill = {
   id: string;
   tokenNo: number;
+  // Generic items count (legacy field name "plates"). Sum of every line-item
+  // qty on the bill. Kept on the Bill type for callers that still pass it.
   plates: number;
   mealType: 'lunch' | 'dinner';
+  // Legacy field — not used by the slip post-refactor (line items carry
+  // their own price snapshots). Kept so older callers compile.
   pricePerPlate: number;
   total: number;
   paymentMode: 'cash' | 'upi';
   createdAt: string;
   restaurantName: string;
-  extras?: BillExtra[];
+  // The line items on the bill. `items` is the canonical name; `extras`
+  // is the legacy alias that older call sites still use.
+  items?: BillItem[];
+  extras?: BillItem[];
 };
 
 // Thermal printers (8 dots/mm) struggle with anti-aliased proportional fonts —
@@ -120,66 +127,29 @@ function getRestaurantHeader() {
   };
 }
 
-// Sum of all line-item quantities (Thali + every extra). Mirrors what
-// "Total Qty" means on a typical retail slip: the count of physical items
-// across all rows, not the number of rows.
-function totalItemQty(bill: Bill): number {
-  return bill.plates + (bill.extras ?? []).reduce((s, x) => s + x.qty, 0);
+// Reads the line items from whichever field the caller populated — `items`
+// is the post-refactor canonical name; `extras` was the legacy alias.
+function billLineItems(bill: Bill): BillItem[] {
+  return bill.items ?? bill.extras ?? [];
 }
 
-// Customer item table rows: one Thali row, then one row per extra. Cells
-// match the 4-column header (No.Item / QTY / Price / Amount). Extracted so
-// the same shape can be reused in both customer and manager builders.
+// Sum of all line-item quantities. Mirrors what "Total Qty" means on a typical
+// retail slip: the count of physical items across all rows, not the number of
+// rows.
+function totalItemQty(bill: Bill): number {
+  return billLineItems(bill).reduce((s, x) => s + x.qty, 0);
+}
+
+// Customer item table rows — one row per line item. Cells match the
+// 4-column header (No.Item / QTY / Price / Amount). Every menu item lives in
+// `items` post-refactor (Thali included), so no special row.
 function customerItemRows(bill: Bill): PosPrintTableField[][] {
-  const rows: PosPrintTableField[][] = [
-    [
-      {
-        type: 'text',
-        value: '1. THALI',
-        style: {
-          textAlign: 'left',
-          fontSize: '12px',
-          fontWeight: 'bold',
-          padding: '2px 12px 2px 0',
-        },
-      },
-      {
-        type: 'text',
-        value: `${bill.plates}`,
-        style: {
-          textAlign: 'right',
-          fontSize: '14px',
-          fontWeight: 'bold',
-          padding: '2px 12px 2px 0',
-        },
-      },
-      {
-        type: 'text',
-        value: `${bill.pricePerPlate}.00`,
-        style: {
-          textAlign: 'right',
-          fontWeight: 'bold',
-          fontSize: '11px',
-          padding: '2px 12px 2px 0',
-        },
-      },
-      {
-        type: 'text',
-        value: `${bill.plates * bill.pricePerPlate}.00`,
-        style: {
-          textAlign: 'right',
-          fontSize: '12px',
-          fontWeight: 'bold',
-          padding: '2px 16px 2px 0',
-        },
-      },
-    ],
-  ];
-  (bill.extras ?? []).forEach((x, i) => {
+  const rows: PosPrintTableField[][] = [];
+  billLineItems(bill).forEach((x, i) => {
     rows.push([
       {
         type: 'text',
-        value: `${i + 2}. ${x.name.toUpperCase()}`,
+        value: `${i + 1}. ${x.name.toUpperCase()}`,
         style: {
           textAlign: 'left',
           fontSize: '12px',
@@ -224,50 +194,12 @@ function customerItemRows(bill: Bill): PosPrintTableField[][] {
 
 // Manager item table rows — 4 cols: SNo / Item / QTY / Amount (no Price col).
 function managerItemRows(bill: Bill): PosPrintTableField[][] {
-  const rows: PosPrintTableField[][] = [
-    [
-      {
-        type: 'text',
-        value: '1',
-        style: { textAlign: 'left', fontSize: '12px', padding: '2px 12px 2px 0' },
-      },
-      {
-        type: 'text',
-        value: 'THALI',
-        style: {
-          textAlign: 'left',
-          fontSize: '12px',
-          fontWeight: 'bold',
-          padding: '2px 12px 2px 0',
-        },
-      },
-      {
-        type: 'text',
-        value: `${bill.plates}`,
-        style: {
-          textAlign: 'right',
-          fontSize: '14px',
-          fontWeight: 'bold',
-          padding: '2px 12px 2px 0',
-        },
-      },
-      {
-        type: 'text',
-        value: `${bill.plates * bill.pricePerPlate}.00`,
-        style: {
-          textAlign: 'right',
-          fontSize: '12px',
-          fontWeight: 'bold',
-          padding: '2px 16px 2px 0',
-        },
-      },
-    ],
-  ];
-  (bill.extras ?? []).forEach((x, i) => {
+  const rows: PosPrintTableField[][] = [];
+  billLineItems(bill).forEach((x, i) => {
     rows.push([
       {
         type: 'text',
-        value: `${i + 2}`,
+        value: `${i + 1}`,
         style: { textAlign: 'left', fontSize: '12px', padding: '2px 12px 2px 0' },
       },
       {
@@ -940,12 +872,13 @@ export async function printDaySummary(s: DaySummary) {
 
   // Per-meal block: section header → 4-col item table → meal subtotal row.
   // Returns an empty list when the meal has no bills so the slip stays compact.
+  // Every menu item (including Thali) lives in m.extras post-refactor, so we
+  // just iterate that list.
   const mealBlock = (label: 'LUNCH' | 'DINNER', m: MealBreakdown): PosPrintData[] => {
     if (m.bills === 0) return [];
-    const body: PosPrintTableField[][] = [];
-    let n = 1;
-    if (m.plates > 0) body.push(itemRow(n++, 'THALI', m.plates, m.plateRevenue));
-    for (const x of m.extras) body.push(itemRow(n++, x.name.toUpperCase(), x.qty, x.revenue));
+    const body: PosPrintTableField[][] = m.extras.map((x, i) =>
+      itemRow(i + 1, x.name.toUpperCase(), x.qty, x.revenue)
+    );
     return [
       sectionHeader(label),
       {

@@ -3,8 +3,8 @@ import bcrypt from 'bcryptjs';
 import { randomUUID } from 'node:crypto';
 import { getDb, localISODate, nextTokenNo, writeAudit } from './db';
 import { printToken, printDaySummary, printTest } from './printer';
-import { syncPendingBills } from './sync';
-import { pushSetting, pushPrices, pushExtrasCatalog } from './settings-sync';
+import { syncPendingBills, computeCloudDiff, restoreFromCloud } from './sync';
+import { pushSetting, pushPrices, pushExtrasCatalog, pullRemoteSettings } from './settings-sync';
 import { previewTokenPdf } from './preview-pdf';
 import { exportDay, openExportFolder, getExportDir } from './export';
 import { dialog } from 'electron';
@@ -124,83 +124,111 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
   );
 
   // ---- BILLS ----
+  // Resolves each requested catalog item to a snapshot row (name + price for
+  // the current meal). Returns null if any id is missing or inactive — caller
+  // should bubble that as a user-visible error.
+  type ItemResolved = {
+    rowId: string;
+    catalogId: string;
+    name: string;
+    qty: number;
+    unitPrice: number;
+    plateWeight: number;
+    total: number;
+    sortOrder: number;
+  };
+  function resolveBillItems(
+    requested: Array<{ itemId: string; qty: number }>,
+    mealType: 'lunch' | 'dinner'
+  ): { ok: true; items: ItemResolved[] } | { ok: false; error: string } {
+    const items: ItemResolved[] = [];
+    for (const r of requested) {
+      if (r.qty <= 0) continue;
+      const cat = getDb()
+        .prepare(
+          `SELECT id, name, lunch_price, dinner_price, plate_weight, sort_order
+             FROM extras_catalog WHERE id = ? AND active = 1`
+        )
+        .get(r.itemId) as
+        | {
+            id: string;
+            name: string;
+            lunch_price: number;
+            dinner_price: number;
+            plate_weight: number;
+            sort_order: number;
+          }
+        | undefined;
+      if (!cat) return { ok: false, error: `Item not found: ${r.itemId}` };
+      const unitPrice = mealType === 'lunch' ? cat.lunch_price : cat.dinner_price;
+      if (!unitPrice || unitPrice <= 0) {
+        return {
+          ok: false,
+          error: `${cat.name} has no ${mealType} price set — fix it on the Menu page.`,
+        };
+      }
+      items.push({
+        rowId: randomUUID(),
+        catalogId: cat.id,
+        name: cat.name,
+        qty: r.qty,
+        unitPrice,
+        plateWeight: cat.plate_weight ?? 0,
+        total: unitPrice * r.qty,
+        sortOrder: cat.sort_order,
+      });
+    }
+    return { ok: true, items };
+  }
+
   ipcMain.handle(
     'bills:create',
     async (
       _e,
       payload: {
-        plates: number;
         mealType: 'lunch' | 'dinner';
         paymentMode: 'cash' | 'upi';
-        extras?: Array<{ extraId: string; qty: number }>;
+        items: Array<{ itemId: string; qty: number }>;
       }
     ) => {
-      const priceRow = getDb()
-        .prepare('SELECT price_per_plate FROM prices WHERE meal_type = ?')
-        .get(payload.mealType) as { price_per_plate: number } | undefined;
-      if (!priceRow) return { ok: false, error: 'Price not configured' };
-
-      // Resolve each requested extra against the catalog. We snapshot
-      // name + unit_price into bill_extras so a later admin price change
-      // doesn't rewrite this bill's history.
-      type ExtraResolved = {
-        id: string;
-        extraId: string;
-        name: string;
-        qty: number;
-        unitPrice: number;
-        total: number;
-        sortOrder: number;
-      };
-      const requestedExtras = (payload.extras ?? []).filter((e) => e.qty > 0);
-      const extrasResolved: ExtraResolved[] = [];
-      for (const e of requestedExtras) {
-        const cat = getDb()
-          .prepare(
-            'SELECT id, name, unit_price, sort_order FROM extras_catalog WHERE id = ? AND active = 1'
-          )
-          .get(e.extraId) as
-          | { id: string; name: string; unit_price: number; sort_order: number }
-          | undefined;
-        if (!cat) return { ok: false, error: `Extra not found: ${e.extraId}` };
-        extrasResolved.push({
-          id: randomUUID(),
-          extraId: cat.id,
-          name: cat.name,
-          qty: e.qty,
-          unitPrice: cat.unit_price,
-          total: cat.unit_price * e.qty,
-          sortOrder: cat.sort_order,
-        });
+      const resolved = resolveBillItems(payload.items ?? [], payload.mealType);
+      if (!resolved.ok) return resolved;
+      if (resolved.items.length === 0) {
+        return { ok: false, error: 'Add at least one item to the bill' };
       }
 
       const id = randomUUID();
       const tokenNo = nextTokenNo();
-      const thaliSubtotal = priceRow.price_per_plate * payload.plates;
-      const extrasSubtotal = extrasResolved.reduce((s, x) => s + x.total, 0);
-      const total = thaliSubtotal + extrasSubtotal;
+      const total = resolved.items.reduce((s, x) => s + x.total, 0);
+      // bills.plates is the *plate-weighted* count: a thali=1 + child-thali=0.5
+      // contribute 1.5 plates total, rounded for storage in an INTEGER column.
+      // Non-meal items (plate_weight=0) don't push the count up.
+      const platesFloat = resolved.items.reduce((s, x) => s + x.qty * x.plateWeight, 0);
+      const platesStored = Math.round(platesFloat);
 
       const tx = getDb().transaction(() => {
         getDb()
           .prepare(
             `INSERT INTO bills (id, token_no, plates, meal_type, price_per_plate, total, payment_mode)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
+             VALUES (?, ?, ?, ?, 0, ?, ?)`
           )
-          .run(
-            id,
-            tokenNo,
-            payload.plates,
-            payload.mealType,
-            priceRow.price_per_plate,
-            total,
-            payload.paymentMode
-          );
-        const insExtra = getDb().prepare(
-          `INSERT INTO bill_extras (id, bill_id, extra_id, name, qty, unit_price, total, sort_order)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          .run(id, tokenNo, platesStored, payload.mealType, total, payload.paymentMode);
+        const insRow = getDb().prepare(
+          `INSERT INTO bill_items (id, bill_id, catalog_id, name, qty, unit_price, plate_weight, total, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
-        for (const x of extrasResolved) {
-          insExtra.run(x.id, id, x.extraId, x.name, x.qty, x.unitPrice, x.total, x.sortOrder);
+        for (const x of resolved.items) {
+          insRow.run(
+            x.rowId,
+            id,
+            x.catalogId,
+            x.name,
+            x.qty,
+            x.unitPrice,
+            x.plateWeight,
+            x.total,
+            x.sortOrder
+          );
         }
       });
       tx();
@@ -208,13 +236,13 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       const bill = {
         id,
         tokenNo,
-        plates: payload.plates,
+        plates: platesStored,
         mealType: payload.mealType,
-        pricePerPlate: priceRow.price_per_plate,
+        pricePerPlate: 0,
         total,
         paymentMode: payload.paymentMode,
         createdAt: new Date().toISOString(),
-        extras: extrasResolved.map((x) => ({
+        items: resolved.items.map((x) => ({
           name: x.name,
           qty: x.qty,
           unitPrice: x.unitPrice,
@@ -227,9 +255,6 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
           | { value: string }
           | undefined)?.value ?? 'Restaurant';
 
-      // Await the print so the renderer can surface a toast on failure (and
-      // offer "Reprint"). The bill itself is already committed — a print error
-      // never blocks the sale.
       let printError: string | undefined;
       try {
         await printToken({ ...bill, restaurantName });
@@ -245,7 +270,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
 
   // ---- TEST PRINT ----
   // Same shape as bills:create but writes nothing: no bills row, no
-  // bill_extras row, no token-number consumption (nextTokenNo only reads),
+  // bill_items row, no token-number consumption (nextTokenNo only reads),
   // no audit log entry, no sync trigger. Used by the admin to verify the
   // slip layout / printer driver / paper feed without polluting analytics
   // or pushing fake data to Supabase.
@@ -254,35 +279,20 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     async (
       _e,
       payload: {
-        plates: number;
         mealType: 'lunch' | 'dinner';
         paymentMode: 'cash' | 'upi';
-        extras?: Array<{ extraId: string; qty: number }>;
+        items: Array<{ itemId: string; qty: number }>;
       }
     ) => {
-      const priceRow = getDb()
-        .prepare('SELECT price_per_plate FROM prices WHERE meal_type = ?')
-        .get(payload.mealType) as { price_per_plate: number } | undefined;
-      if (!priceRow) return { ok: false, error: 'Price not configured' };
-
-      const requestedExtras = (payload.extras ?? []).filter((e) => e.qty > 0);
-      const extras: Array<{ name: string; qty: number; unitPrice: number; total: number }> = [];
-      for (const e of requestedExtras) {
-        const cat = getDb()
-          .prepare('SELECT name, unit_price FROM extras_catalog WHERE id = ? AND active = 1')
-          .get(e.extraId) as { name: string; unit_price: number } | undefined;
-        if (!cat) return { ok: false, error: `Extra not found: ${e.extraId}` };
-        extras.push({
-          name: cat.name,
-          qty: e.qty,
-          unitPrice: cat.unit_price,
-          total: cat.unit_price * e.qty,
-        });
+      const resolved = resolveBillItems(payload.items ?? [], payload.mealType);
+      if (!resolved.ok) return resolved;
+      if (resolved.items.length === 0) {
+        return { ok: false, error: 'Add at least one item before test-printing' };
       }
-
-      const thaliSubtotal = priceRow.price_per_plate * payload.plates;
-      const extrasSubtotal = extras.reduce((s, x) => s + x.total, 0);
-      const total = thaliSubtotal + extrasSubtotal;
+      const total = resolved.items.reduce((s, x) => s + x.total, 0);
+      const platesStored = Math.round(
+        resolved.items.reduce((s, x) => s + x.qty * x.plateWeight, 0)
+      );
       const restaurantName =
         (getDb().prepare("SELECT value FROM settings WHERE key='restaurant_name'").get() as
           | { value: string }
@@ -292,14 +302,19 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
         await printToken({
           id: 'test-print',
           tokenNo: nextTokenNo(),
-          plates: payload.plates,
+          plates: platesStored,
           mealType: payload.mealType,
-          pricePerPlate: priceRow.price_per_plate,
+          pricePerPlate: 0,
           total,
           paymentMode: payload.paymentMode,
           createdAt: new Date().toISOString(),
           restaurantName,
-          extras,
+          items: resolved.items.map((x) => ({
+            name: x.name,
+            qty: x.qty,
+            unitPrice: x.unitPrice,
+            total: x.total,
+          })),
         });
         return { ok: true };
       } catch (err: any) {
@@ -313,7 +328,11 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
   ipcMain.handle('extras:list', () => {
     return getDb()
       .prepare(
-        'SELECT id, name, unit_price as unitPrice, active, sort_order as sortOrder, shortcut_key as shortcutKey FROM extras_catalog WHERE active = 1 ORDER BY sort_order, name'
+        `SELECT id, name,
+                lunch_price as lunchPrice, dinner_price as dinnerPrice,
+                plate_weight as plateWeight,
+                active, sort_order as sortOrder, shortcut_key as shortcutKey
+           FROM extras_catalog WHERE active = 1 ORDER BY sort_order, name`
       )
       .all();
   });
@@ -322,7 +341,11 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
   ipcMain.handle('extras:listAll', () => {
     return getDb()
       .prepare(
-        'SELECT id, name, unit_price as unitPrice, active, sort_order as sortOrder, shortcut_key as shortcutKey FROM extras_catalog ORDER BY sort_order, name'
+        `SELECT id, name,
+                lunch_price as lunchPrice, dinner_price as dinnerPrice,
+                plate_weight as plateWeight,
+                active, sort_order as sortOrder, shortcut_key as shortcutKey
+           FROM extras_catalog ORDER BY sort_order, name`
       )
       .all();
   });
@@ -334,7 +357,9 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       payload: {
         id?: string;
         name: string;
-        unitPrice: number;
+        lunchPrice: number;
+        dinnerPrice: number;
+        plateWeight: number;
         active: boolean;
         sortOrder: number;
         shortcutKey?: string | null;
@@ -342,21 +367,33 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     ) => {
       const name = payload.name.trim();
       if (!name) return { ok: false, error: 'Name required' };
-      if (!Number.isFinite(payload.unitPrice) || payload.unitPrice <= 0) {
-        return { ok: false, error: 'Price must be a positive number' };
+      if (!Number.isFinite(payload.lunchPrice) || payload.lunchPrice < 0) {
+        return { ok: false, error: 'Lunch price must be a non-negative number' };
       }
-      // Normalize shortcut: uppercase single letter, or null. Reserve T (Thali),
-      // C (Cash), U (UPI) — those map to fixed actions on the Billing page.
+      if (!Number.isFinite(payload.dinnerPrice) || payload.dinnerPrice < 0) {
+        return { ok: false, error: 'Dinner price must be a non-negative number' };
+      }
+      if (payload.lunchPrice <= 0 && payload.dinnerPrice <= 0) {
+        return { ok: false, error: 'Set at least one of lunch or dinner price' };
+      }
+      if (!Number.isFinite(payload.plateWeight) || payload.plateWeight < 0) {
+        return { ok: false, error: 'Plate count must be a non-negative number' };
+      }
+      // Round plate_weight to one decimal so the field stays small and
+      // predictable (1, 0.5, 0.25, 0). Free-form floats invite drift.
+      const plateWeight = Math.round(payload.plateWeight * 10) / 10;
+      // Normalize shortcut: uppercase single letter, or null. Reserve only
+      // C (Cash) and U (UPI) — T is now a regular item shortcut since Thali
+      // lives in the catalog like every other item.
       let shortcutKey: string | null = null;
       const raw = (payload.shortcutKey ?? '').trim().toUpperCase();
       if (raw) {
         if (!/^[A-Z]$/.test(raw)) {
           return { ok: false, error: 'Shortcut must be a single letter A-Z' };
         }
-        if (raw === 'T' || raw === 'C' || raw === 'U') {
-          return { ok: false, error: `"${raw}" is reserved (T=Thali, C=Cash, U=UPI)` };
+        if (raw === 'C' || raw === 'U') {
+          return { ok: false, error: `"${raw}" is reserved (C=Cash, U=UPI)` };
         }
-        // Reject if another active item already uses that letter.
         const conflict = getDb()
           .prepare(
             'SELECT id FROM extras_catalog WHERE shortcut_key = ? AND active = 1 AND id != ?'
@@ -369,23 +406,42 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       }
       const isUpdate = !!payload.id;
       const id = payload.id ?? randomUUID();
+      const lunchP = Math.round(payload.lunchPrice);
+      const dinnerP = Math.round(payload.dinnerPrice);
+      // Keep unit_price = max(lunch, dinner) so legacy reads (CSV exports,
+      // pre-refactor analytics) get a sensible fallback price.
+      const unitP = Math.max(lunchP, dinnerP);
       try {
         if (isUpdate) {
           const prev = getDb()
-            .prepare('SELECT name, unit_price, active, shortcut_key FROM extras_catalog WHERE id = ?')
+            .prepare(
+              'SELECT name, lunch_price, dinner_price, plate_weight, active, shortcut_key FROM extras_catalog WHERE id = ?'
+            )
             .get(id) as
-            | { name: string; unit_price: number; active: number; shortcut_key: string | null }
+            | {
+                name: string;
+                lunch_price: number;
+                dinner_price: number;
+                plate_weight: number;
+                active: number;
+                shortcut_key: string | null;
+              }
             | undefined;
           if (!prev) return { ok: false, error: 'Item not found' };
           getDb()
             .prepare(
               `UPDATE extras_catalog
-                  SET name = ?, unit_price = ?, active = ?, sort_order = ?, shortcut_key = ?, updated_at = datetime('now')
+                  SET name = ?, unit_price = ?, lunch_price = ?, dinner_price = ?,
+                      plate_weight = ?, active = ?, sort_order = ?, shortcut_key = ?,
+                      updated_at = datetime('now')
                 WHERE id = ?`
             )
             .run(
               name,
-              Math.round(payload.unitPrice),
+              unitP,
+              lunchP,
+              dinnerP,
+              plateWeight,
               payload.active ? 1 : 0,
               payload.sortOrder,
               shortcutKey,
@@ -399,13 +455,17 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
             details: {
               from: {
                 name: prev.name,
-                price: prev.unit_price,
+                lunch: prev.lunch_price,
+                dinner: prev.dinner_price,
+                plate: prev.plate_weight,
                 active: !!prev.active,
                 shortcut: prev.shortcut_key,
               },
               to: {
                 name,
-                price: payload.unitPrice,
+                lunch: lunchP,
+                dinner: dinnerP,
+                plate: plateWeight,
                 active: payload.active,
                 shortcut: shortcutKey,
               },
@@ -414,13 +474,16 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
         } else {
           getDb()
             .prepare(
-              `INSERT INTO extras_catalog (id, name, unit_price, active, sort_order, shortcut_key)
-               VALUES (?, ?, ?, ?, ?, ?)`
+              `INSERT INTO extras_catalog (id, name, unit_price, lunch_price, dinner_price, plate_weight, active, sort_order, shortcut_key)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
               id,
               name,
-              Math.round(payload.unitPrice),
+              unitP,
+              lunchP,
+              dinnerP,
+              plateWeight,
               payload.active ? 1 : 0,
               payload.sortOrder,
               shortcutKey
@@ -433,7 +496,9 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
             details: {
               created: {
                 name,
-                price: payload.unitPrice,
+                lunch: lunchP,
+                dinner: dinnerP,
+                plate: plateWeight,
                 active: payload.active,
                 shortcut: shortcutKey,
               },
@@ -541,7 +606,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       const extras = getDb()
         .prepare(
           `SELECT bill_id, name, qty, unit_price as unitPrice, total
-             FROM bill_extras
+             FROM bill_items
             WHERE bill_id IN (${placeholders})
             ORDER BY sort_order, name`
         )
@@ -757,6 +822,186 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     return row.c;
   });
 
+  // Manual catalog refresh — admin and manager. Uses the same pull path
+  // as the 5-minute scheduled tick, just on demand. Returns the count of
+  // items in the local catalog after the pull so the UI can show feedback.
+  ipcMain.handle('sync:menuNow', async () => {
+    try {
+      await pullRemoteSettings();
+      const c = (
+        getDb().prepare('SELECT COUNT(*) as c FROM extras_catalog').get() as { c: number }
+      ).c;
+      return { ok: true as const, items: c };
+    } catch (err: any) {
+      return { ok: false as const, error: err?.message ?? String(err) };
+    }
+  });
+
+  // Compare local DB against the cloud snapshot — read-only, admin-only.
+  // Returns counts + a sample of mismatched bill ids so the UI can render
+  // a clear "X local-only / Y cloud-only / Z mismatched" summary.
+  ipcMain.handle('sync:cloudDiff', async () => {
+    const result = await computeCloudDiff();
+    if (result.ok) {
+      writeAudit({
+        ...actorFields(),
+        action: 'cloud_diff',
+        details: {
+          localBills: result.localBills,
+          cloudBills: result.cloudBills,
+          onlyLocal: result.onlyLocalBills.length,
+          onlyCloud: result.onlyCloudBills.length,
+          mismatched: result.mismatchedBills.length,
+        },
+      });
+    }
+    return result;
+  });
+
+  // Cloud-side wins. Two flavors:
+  //  - safe: push pending local bills up first, then pull-and-replace
+  //  - force: skip the push step (any local-only bill is destroyed)
+  // Audit-logged with explicit mode so a future "what happened" trace is clean.
+  ipcMain.handle('sync:cloudRestore', async (_e, mode: 'safe' | 'force') => {
+    const r = await restoreFromCloud({ pushPendingFirst: mode === 'safe' });
+    writeAudit({
+      ...actorFields(),
+      action: 'cloud_restore',
+      details: r.ok
+        ? {
+            mode,
+            insertedBills: r.insertedBills,
+            insertedItems: r.insertedItems,
+            deletedBills: r.deletedBills,
+            deletedItems: r.deletedItems,
+          }
+        : { mode, error: r.reason },
+    });
+    return r;
+  });
+
+  // ---- BILL EDIT ----
+  // Admin-only: replace the line items of a bill with a new set + adjust
+  // payment mode. Voided bills can't be edited. The bill is re-pended so
+  // the change pushes to Supabase on the next sync (idempotent upsert on
+  // bills, fresh INSERTs on bill_items — old items removed by FK CASCADE
+  // when we DELETE-then-INSERT inside the txn).
+  ipcMain.handle(
+    'bills:edit',
+    async (
+      _e,
+      payload: {
+        billId: string;
+        paymentMode: 'cash' | 'upi';
+        items: Array<{ itemId: string; qty: number }>;
+      }
+    ) => {
+      const bill = getDb()
+        .prepare(
+          'SELECT id, meal_type, voided_at, total, payment_mode FROM bills WHERE id = ?'
+        )
+        .get(payload.billId) as
+        | {
+            id: string;
+            meal_type: 'lunch' | 'dinner';
+            voided_at: string | null;
+            total: number;
+            payment_mode: 'cash' | 'upi';
+          }
+        | undefined;
+      if (!bill) return { ok: false as const, error: 'Bill not found' };
+      if (bill.voided_at)
+        return { ok: false as const, error: 'Voided bills cannot be edited' };
+      if (payload.paymentMode !== 'cash' && payload.paymentMode !== 'upi')
+        return { ok: false as const, error: 'Invalid payment mode' };
+
+      const resolved = resolveBillItems(payload.items ?? [], bill.meal_type);
+      if (!resolved.ok) return resolved;
+      if (resolved.items.length === 0) {
+        return { ok: false as const, error: 'A bill must have at least one item' };
+      }
+      const newTotal = resolved.items.reduce((s, x) => s + x.total, 0);
+      const newPlates = Math.round(
+        resolved.items.reduce((s, x) => s + x.qty * x.plateWeight, 0)
+      );
+
+      const before = getDb()
+        .prepare(
+          'SELECT name, qty, unit_price, total FROM bill_items WHERE bill_id = ? ORDER BY sort_order, name'
+        )
+        .all(payload.billId) as Array<{
+        name: string;
+        qty: number;
+        unit_price: number;
+        total: number;
+      }>;
+
+      const tx = getDb().transaction(() => {
+        getDb().prepare('DELETE FROM bill_items WHERE bill_id = ?').run(payload.billId);
+        const ins = getDb().prepare(
+          `INSERT INTO bill_items (id, bill_id, catalog_id, name, qty, unit_price, plate_weight, total, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const it of resolved.items) {
+          ins.run(
+            it.rowId,
+            payload.billId,
+            it.catalogId,
+            it.name,
+            it.qty,
+            it.unitPrice,
+            it.plateWeight,
+            it.total,
+            it.sortOrder
+          );
+        }
+        getDb()
+          .prepare(
+            `UPDATE bills
+                SET total = ?, plates = ?, payment_mode = ?, sync_status = 'pending'
+              WHERE id = ?`
+          )
+          .run(newTotal, newPlates, payload.paymentMode, payload.billId);
+      });
+      tx();
+
+      writeAudit({
+        ...actorFields(),
+        action: 'bill_edit',
+        entityType: 'bill',
+        entityId: payload.billId,
+        details: {
+          from: {
+            total: bill.total,
+            paymentMode: bill.payment_mode,
+            items: before.map((b) => ({
+              name: b.name,
+              qty: b.qty,
+              unitPrice: b.unit_price,
+              total: b.total,
+            })),
+          },
+          to: {
+            total: newTotal,
+            paymentMode: payload.paymentMode,
+            items: resolved.items.map((x) => ({
+              name: x.name,
+              qty: x.qty,
+              unitPrice: x.unitPrice,
+              total: x.total,
+            })),
+          },
+        },
+      });
+
+      // Best-effort cloud push so the edit propagates without waiting for
+      // the next scheduled tick. Pending status guarantees retry on failure.
+      syncPendingBills().catch((e) => console.error('Sync after bill edit failed:', e));
+
+      return { ok: true as const, total: newTotal };
+    }
+  );
+
   // ---- DAY SUMMARY (Z-report) ----
   // Shared compute path so day:summary (modal/UI) and day:print (slip) can
   // never disagree. Returns both the legacy flat fields and the richer
@@ -778,14 +1023,15 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       last_token: number | null;
     };
 
-    // Per-meal aggregates: bills count, Thali plates, plate-only revenue,
-    // and full revenue (plates + extras for that meal).
+    // Per-meal bill totals — item-level breakdown comes from the join below.
+    // bills.plates is now a generic items count (kept for legacy aggregations);
+    // it sums all line-items including Thali, so we no longer use it as a
+    // Thali-specific count.
     const meals = getDb()
       .prepare(
         `SELECT meal_type,
                 COUNT(*) as bills,
-                COALESCE(SUM(plates),0) as plates,
-                COALESCE(SUM(plates * price_per_plate),0) as plate_revenue,
+                COALESCE(SUM(plates),0) as items,
                 COALESCE(SUM(total),0) as total_revenue
            FROM bills
           WHERE date(created_at, 'localtime') = ?
@@ -795,8 +1041,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       .all(day) as Array<{
       meal_type: 'lunch' | 'dinner';
       bills: number;
-      plates: number;
-      plate_revenue: number;
+      items: number;
       total_revenue: number;
     }>;
 
@@ -804,15 +1049,15 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     // so the report stays correct even after admin renames an extra later.
     const extrasByMeal = getDb()
       .prepare(
-        `SELECT b.meal_type, be.name,
-                COALESCE(SUM(be.qty), 0) as qty,
-                COALESCE(SUM(be.total), 0) as revenue
-           FROM bill_extras be
-           JOIN bills b ON b.id = be.bill_id
+        `SELECT b.meal_type, bi.name,
+                COALESCE(SUM(bi.qty), 0) as qty,
+                COALESCE(SUM(bi.total), 0) as revenue
+           FROM bill_items bi
+           JOIN bills b ON b.id = bi.bill_id
           WHERE date(b.created_at, 'localtime') = ?
             AND b.voided_at IS NULL
-          GROUP BY b.meal_type, be.name
-          ORDER BY b.meal_type, be.name`
+          GROUP BY b.meal_type, bi.name
+          ORDER BY b.meal_type, bi.name`
       )
       .all(day) as Array<{
       meal_type: 'lunch' | 'dinner';
@@ -833,14 +1078,19 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
 
     const buildMeal = (mt: 'lunch' | 'dinner') => {
       const m = meals.find((x) => x.meal_type === mt);
+      const items = extrasByMeal
+        .filter((x) => x.meal_type === mt)
+        .map((x) => ({ name: x.name, qty: x.qty, revenue: x.revenue }));
       return {
         bills: m?.bills ?? 0,
-        plates: m?.plates ?? 0,
-        plateRevenue: m?.plate_revenue ?? 0,
+        items: m?.items ?? 0,
         revenue: m?.total_revenue ?? 0,
-        extras: extrasByMeal
-          .filter((x) => x.meal_type === mt)
-          .map((x) => ({ name: x.name, qty: x.qty, revenue: x.revenue })),
+        // Legacy field names for any consumers still reading them.
+        plates: m?.items ?? 0,
+        plateRevenue: 0,
+        extras: items,
+        // Canonical post-refactor name — every line item for this meal.
+        lineItems: items,
       };
     };
 
@@ -857,23 +1107,25 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       .map(([name, v]) => ({ name, qty: v.qty, revenue: v.revenue }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
+    const lunch = buildMeal('lunch');
+    const dinner = buildMeal('dinner');
     return {
       day,
       totalBills: totals.bills,
-      totalPlates: totals.plates,
+      totalPlates: totals.plates, // generic items count (legacy field name)
+      totalItems: totals.plates,
       totalRevenue: totals.revenue,
       firstToken: totals.first_token,
       lastToken: totals.last_token,
       // Legacy flat fields kept so older renderer code keeps working.
-      lunchPlates: buildMeal('lunch').plates,
-      lunchRevenue: buildMeal('lunch').revenue,
-      dinnerPlates: buildMeal('dinner').plates,
-      dinnerRevenue: buildMeal('dinner').revenue,
+      lunchPlates: lunch.items,
+      lunchRevenue: lunch.revenue,
+      dinnerPlates: dinner.items,
+      dinnerRevenue: dinner.revenue,
       cashRevenue: pays.find((p) => p.payment_mode === 'cash')?.revenue ?? 0,
       upiRevenue: pays.find((p) => p.payment_mode === 'upi')?.revenue ?? 0,
-      // Rich breakdown.
-      lunch: buildMeal('lunch'),
-      dinner: buildMeal('dinner'),
+      lunch,
+      dinner,
       extras,
     };
   }
@@ -1267,7 +1519,7 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
     const extras = getDb()
       .prepare(
         `SELECT name, qty, unit_price as unitPrice, total
-           FROM bill_extras WHERE bill_id = ? ORDER BY sort_order, name`
+           FROM bill_items WHERE bill_id = ? ORDER BY sort_order, name`
       )
       .all(bill.id) as Array<{ name: string; qty: number; unitPrice: number; total: number }>;
     await printToken({

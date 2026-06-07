@@ -11,10 +11,9 @@ const SYNCED_KEYS = [
   'restaurant_mobile',
   'restaurant_insta',
   'backup_schedule',
-  'price_lunch',
-  'price_dinner',
-  // Whole catalog serialized as a single JSON value. Treated as one key so
-  // pull-then-replace is atomic — all rows update or none.
+  // Catalog (incl. each item's lunch + dinner price and plate_weight) is the
+  // single source of pricing post-refactor. The legacy price_lunch /
+  // price_dinner top-level keys are no longer synced.
   'extras_catalog',
 ];
 
@@ -119,12 +118,17 @@ export async function pushExtrasCatalog(): Promise<void> {
   try {
     const rows = getDb()
       .prepare(
-        'SELECT id, name, unit_price, active, sort_order, shortcut_key FROM extras_catalog ORDER BY sort_order, name'
+        `SELECT id, name, unit_price, lunch_price, dinner_price, plate_weight,
+                active, sort_order, shortcut_key
+           FROM extras_catalog ORDER BY sort_order, name`
       )
       .all() as Array<{
       id: string;
       name: string;
       unit_price: number;
+      lunch_price: number;
+      dinner_price: number;
+      plate_weight: number;
       active: number;
       sort_order: number;
       shortcut_key: string | null;
@@ -177,28 +181,20 @@ export async function pullRemoteSettings(): Promise<void> {
 }
 
 function applyRemoteSetting(key: string, value: string) {
-  if (key === 'price_lunch' || key === 'price_dinner') {
-    const meal = key === 'price_lunch' ? 'lunch' : 'dinner';
-    const n = Number(value);
-    if (!Number.isFinite(n) || n <= 0) return;
-    getDb()
-      .prepare(
-        `INSERT INTO prices (meal_type, price_per_plate, updated_at)
-         VALUES (?, ?, datetime('now'))
-         ON CONFLICT(meal_type) DO UPDATE SET price_per_plate=excluded.price_per_plate, updated_at=datetime('now')`
-      )
-      .run(meal, Math.round(n));
-    return;
-  }
   if (key === 'extras_catalog') {
     // Replace-strategy: parse the snapshot, wipe local catalog, reinsert from
     // the remote rows. Bills already reference items via denormalized name +
     // unit_price snapshots, so re-keying catalog rows can't break history.
+    // Falls back gracefully on missing fields from older snapshots: an old
+    // PC might still be pushing pre-refactor JSON without lunch/dinner/plate.
     try {
       const incoming = JSON.parse(value) as Array<{
         id: string;
         name: string;
         unit_price: number;
+        lunch_price?: number;
+        dinner_price?: number;
+        plate_weight?: number;
         active: number;
         sort_order: number;
         shortcut_key?: string | null;
@@ -206,14 +202,17 @@ function applyRemoteSetting(key: string, value: string) {
       const tx = getDb().transaction(() => {
         getDb().prepare('DELETE FROM extras_catalog').run();
         const ins = getDb().prepare(
-          `INSERT INTO extras_catalog (id, name, unit_price, active, sort_order, shortcut_key)
-           VALUES (?, ?, ?, ?, ?, ?)`
+          `INSERT INTO extras_catalog (id, name, unit_price, lunch_price, dinner_price, plate_weight, active, sort_order, shortcut_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
         for (const r of incoming) {
           ins.run(
             r.id,
             r.name,
             r.unit_price,
+            r.lunch_price ?? r.unit_price,
+            r.dinner_price ?? r.unit_price,
+            r.plate_weight ?? 0,
             r.active ? 1 : 0,
             r.sort_order,
             r.shortcut_key ?? null

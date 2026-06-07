@@ -6,8 +6,6 @@ type Props = {
 
 export default function OnboardingWizard({ onDone }: Props) {
   const [restaurantName, setRestaurantName] = useState('');
-  const [lunchPrice, setLunchPrice] = useState<string>('');
-  const [dinnerPrice, setDinnerPrice] = useState<string>('');
   const [printerName, setPrinterName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -16,30 +14,21 @@ export default function OnboardingWizard({ onDone }: Props) {
     (async () => {
       const name = (await window.api.settings.get('restaurant_name')) ?? '';
       const printer = (await window.api.settings.get('printer_name')) ?? '';
-      const p = await window.api.prices.get();
       setRestaurantName(name);
       setPrinterName(printer);
-      setLunchPrice(p.lunch > 0 ? String(p.lunch) : '');
-      setDinnerPrice(p.dinner > 0 ? String(p.dinner) : '');
     })();
   }, []);
 
   const save = async () => {
     setError('');
     const name = restaurantName.trim();
-    const lunch = Number(lunchPrice);
-    const dinner = Number(dinnerPrice);
     if (!name) return setError('Restaurant name is required.');
-    if (!Number.isFinite(lunch) || lunch <= 0) return setError('Enter a valid lunch price.');
-    if (!Number.isFinite(dinner) || dinner <= 0) return setError('Enter a valid dinner price.');
     setSaving(true);
     try {
       await window.api.settings.set('restaurant_name', name);
       if (printerName.trim()) {
         await window.api.settings.set('printer_name', printerName.trim());
       }
-      await window.api.prices.set('lunch', Math.round(lunch));
-      await window.api.prices.set('dinner', Math.round(dinner));
       onDone();
     } finally {
       setSaving(false);
@@ -52,8 +41,9 @@ export default function OnboardingWizard({ onDone }: Props) {
         <div className="mb-4">
           <h2 className="text-2xl font-bold text-gray-800">Welcome 👋</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Let's set up the basics so you can start billing. You can change all of this later
-            from Settings.
+            Set the basics now. After this, open the <strong>Menu</strong> tab to add the items
+            you sell (Thali, Half Thali, Parcel, Water, Sweets…) along with their lunch and
+            dinner prices. Everything else lives in Settings.
           </p>
         </div>
 
@@ -66,38 +56,9 @@ export default function OnboardingWizard({ onDone }: Props) {
               autoFocus
               value={restaurantName}
               onChange={(e) => setRestaurantName(e.target.value)}
-              placeholder="e.g. Girr Kathiyawadi"
+              placeholder="e.g. Jay Girr Kathiyawadi"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg"
             />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs uppercase tracking-wide text-gray-500 mb-1">
-                Lunch Price (₹)
-              </label>
-              <input
-                type="number"
-                inputMode="numeric"
-                value={lunchPrice}
-                onChange={(e) => setLunchPrice(e.target.value)}
-                placeholder="e.g. 120"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
-            <div>
-              <label className="block text-xs uppercase tracking-wide text-gray-500 mb-1">
-                Dinner Price (₹)
-              </label>
-              <input
-                type="number"
-                inputMode="numeric"
-                value={dinnerPrice}
-                onChange={(e) => setDinnerPrice(e.target.value)}
-                placeholder="e.g. 150"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              />
-            </div>
           </div>
 
           <div>
@@ -136,7 +97,7 @@ export default function OnboardingWizard({ onDone }: Props) {
             onClick={save}
             className="px-5 py-2.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Save & Start Billing'}
+            {saving ? 'Saving…' : 'Save & open Menu'}
           </button>
         </div>
       </div>

@@ -23,7 +23,9 @@ const api = {
         Array<{
           id: string;
           name: string;
-          unitPrice: number;
+          lunchPrice: number;
+          dinnerPrice: number;
+          plateWeight: number;
           active: number;
           sortOrder: number;
           shortcutKey: string | null;
@@ -34,7 +36,9 @@ const api = {
         Array<{
           id: string;
           name: string;
-          unitPrice: number;
+          lunchPrice: number;
+          dinnerPrice: number;
+          plateWeight: number;
           active: number;
           sortOrder: number;
           shortcutKey: string | null;
@@ -43,7 +47,9 @@ const api = {
     upsert: (payload: {
       id?: string;
       name: string;
-      unitPrice: number;
+      lunchPrice: number;
+      dinnerPrice: number;
+      plateWeight: number;
       active: boolean;
       sortOrder: number;
       shortcutKey?: string | null;
@@ -56,16 +62,14 @@ const api = {
   },
   bills: {
     create: (payload: {
-      plates: number;
       mealType: 'lunch' | 'dinner';
       paymentMode: 'cash' | 'upi';
-      extras?: Array<{ extraId: string; qty: number }>;
+      items: Array<{ itemId: string; qty: number }>;
     }) => ipcRenderer.invoke('bills:create', payload),
     testPrint: (payload: {
-      plates: number;
       mealType: 'lunch' | 'dinner';
       paymentMode: 'cash' | 'upi';
-      extras?: Array<{ extraId: string; qty: number }>;
+      items: Array<{ itemId: string; qty: number }>;
     }) =>
       ipcRenderer.invoke('bills:testPrint', payload) as Promise<{
         ok: boolean;
@@ -83,6 +87,14 @@ const api = {
         ok: boolean;
         error?: string;
       }>,
+    edit: (payload: {
+      billId: string;
+      paymentMode: 'cash' | 'upi';
+      items: Array<{ itemId: string; qty: number }>;
+    }) =>
+      ipcRenderer.invoke('bills:edit', payload) as Promise<
+        { ok: true; total: number } | { ok: false; error: string }
+      >,
   },
   analytics: {
     summary: (range: { from: string; to: string }) =>
@@ -110,6 +122,42 @@ const api = {
   sync: {
     now: () => ipcRenderer.invoke('sync:now'),
     pendingCount: () => ipcRenderer.invoke('sync:pendingCount'),
+    menuNow: () =>
+      ipcRenderer.invoke('sync:menuNow') as Promise<
+        { ok: true; items: number } | { ok: false; error: string }
+      >,
+    cloudDiff: () =>
+      ipcRenderer.invoke('sync:cloudDiff') as Promise<
+        | {
+            ok: true;
+            localBills: number;
+            cloudBills: number;
+            onlyLocalBills: string[];
+            onlyCloudBills: string[];
+            mismatchedBills: Array<{
+              id: string;
+              field: string;
+              local: any;
+              cloud: any;
+            }>;
+            localItems: number;
+            cloudItems: number;
+            onlyLocalItems: number;
+            onlyCloudItems: number;
+          }
+        | { ok: false; reason: string }
+      >,
+    cloudRestore: (mode: 'safe' | 'force') =>
+      ipcRenderer.invoke('sync:cloudRestore', mode) as Promise<
+        | {
+            ok: true;
+            insertedBills: number;
+            insertedItems: number;
+            deletedBills: number;
+            deletedItems: number;
+          }
+        | { ok: false; reason: string }
+      >,
   },
   printer: {
     reprint: (billId: string) => ipcRenderer.invoke('printer:reprint', billId),

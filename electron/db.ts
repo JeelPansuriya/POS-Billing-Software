@@ -17,6 +17,33 @@ export function initDb() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
+  // Pre-CREATE rename: if the old bill_extras table exists, rename it to
+  // bill_items BEFORE running the CREATE TABLE block below — otherwise
+  // CREATE TABLE IF NOT EXISTS would create an empty bill_items alongside
+  // the legacy bill_extras and the rename below would fail. Idempotent:
+  // skips when bill_items already exists or bill_extras never did.
+  {
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>;
+    const hasOld = tables.some((t) => t.name === 'bill_extras');
+    const hasNew = tables.some((t) => t.name === 'bill_items');
+    if (hasOld && !hasNew) {
+      db.exec(`ALTER TABLE bill_extras RENAME TO bill_items`);
+      const cols = db
+        .prepare(`PRAGMA table_info(bill_items)`)
+        .all() as Array<{ name: string }>;
+      if (
+        cols.some((c) => c.name === 'extra_id') &&
+        !cols.some((c) => c.name === 'catalog_id')
+      ) {
+        db.exec(`ALTER TABLE bill_items RENAME COLUMN extra_id TO catalog_id`);
+      }
+      db.exec(`DROP INDEX IF EXISTS idx_bill_extras_bill`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_bill_items_bill ON bill_items(bill_id)`);
+    }
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -80,7 +107,12 @@ export function initDb() {
     CREATE TABLE IF NOT EXISTS extras_catalog (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
-      unit_price INTEGER NOT NULL,
+      unit_price INTEGER NOT NULL DEFAULT 0,
+      lunch_price INTEGER NOT NULL DEFAULT 0,
+      dinner_price INTEGER NOT NULL DEFAULT 0,
+      -- How many "plates" this item represents for daily-count aggregations.
+      -- 1 = full thali, 0.5 = half/child, 0 = non-meal item (water, sweet, etc).
+      plate_weight REAL NOT NULL DEFAULT 0,
       active INTEGER NOT NULL DEFAULT 1,
       sort_order INTEGER NOT NULL DEFAULT 0,
       shortcut_key TEXT,
@@ -88,20 +120,21 @@ export function initDb() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    -- Per-bill extras. unit_price is snapshotted at bill time so historical
-    -- bills don't shift when the admin changes catalog prices later. We
-    -- denormalize the name too for the same reason.
-    CREATE TABLE IF NOT EXISTS bill_extras (
+    -- Per-bill line items. unit_price + plate_weight are snapshotted at bill
+    -- time so historical bills don't shift when the admin retunes the catalog
+    -- later. Name is denormalized for the same reason.
+    CREATE TABLE IF NOT EXISTS bill_items (
       id TEXT PRIMARY KEY,
       bill_id TEXT NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
-      extra_id TEXT,
+      catalog_id TEXT,
       name TEXT NOT NULL,
       qty INTEGER NOT NULL,
       unit_price INTEGER NOT NULL,
+      plate_weight REAL NOT NULL DEFAULT 0,
       total INTEGER NOT NULL,
       sort_order INTEGER NOT NULL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_bill_extras_bill ON bill_extras(bill_id);
+    CREATE INDEX IF NOT EXISTS idx_bill_items_bill ON bill_items(bill_id);
   `);
 
   // Migration: rename role 'owner' → 'admin'. SQLite can't ALTER a CHECK
@@ -134,12 +167,113 @@ export function initDb() {
     `);
   }
 
-  // Migration: add shortcut_key to extras_catalog on installs that pre-date it.
+  // Migration: add shortcut_key, lunch_price, dinner_price to extras_catalog
+  // on installs that pre-date them. lunch_price/dinner_price both default
+  // to the existing unit_price so a single-price catalog keeps printing
+  // correctly until admin edits each item.
   const extrasCols = db
     .prepare(`PRAGMA table_info(extras_catalog)`)
     .all() as Array<{ name: string }>;
   if (!extrasCols.some((c) => c.name === 'shortcut_key')) {
     db.exec(`ALTER TABLE extras_catalog ADD COLUMN shortcut_key TEXT`);
+  }
+  if (!extrasCols.some((c) => c.name === 'lunch_price')) {
+    db.exec(`ALTER TABLE extras_catalog ADD COLUMN lunch_price INTEGER NOT NULL DEFAULT 0`);
+    db.exec(`UPDATE extras_catalog SET lunch_price = unit_price WHERE lunch_price = 0`);
+  }
+  if (!extrasCols.some((c) => c.name === 'dinner_price')) {
+    db.exec(`ALTER TABLE extras_catalog ADD COLUMN dinner_price INTEGER NOT NULL DEFAULT 0`);
+    db.exec(`UPDATE extras_catalog SET dinner_price = unit_price WHERE dinner_price = 0`);
+  }
+  if (!extrasCols.some((c) => c.name === 'plate_weight')) {
+    db.exec(`ALTER TABLE extras_catalog ADD COLUMN plate_weight REAL NOT NULL DEFAULT 0`);
+    // Existing pre-refactor extras (sweet, roti, water…) all had no
+    // plate-equivalent meaning, so 0 is the right default for them.
+  }
+
+  // Migration: snapshot plate_weight onto bill_items so historical bills
+  // hold their own count. Pre-refactor rows all came in via the legacy bills
+  // backfill (one Thali line per bill) — those should count as 1 plate.
+  const billItemsCols = db
+    .prepare(`PRAGMA table_info(bill_items)`)
+    .all() as Array<{ name: string }>;
+  if (!billItemsCols.some((c) => c.name === 'plate_weight')) {
+    db.exec(`ALTER TABLE bill_items ADD COLUMN plate_weight REAL NOT NULL DEFAULT 0`);
+    db.exec(`UPDATE bill_items SET plate_weight = 1 WHERE name = 'Thali'`);
+  }
+
+  // Migration: seed a Thali catalog item from the legacy prices table on
+  // first launch after the menu-driven refactor. Idempotent — guarded by a
+  // setting flag, so re-running won't duplicate or revive a deleted Thali.
+  const thaliSeeded = db
+    .prepare("SELECT value FROM settings WHERE key = 'thali_seeded'")
+    .get() as { value: string } | undefined;
+  if (!thaliSeeded) {
+    const legacyPrices = db
+      .prepare('SELECT meal_type, price_per_plate FROM prices')
+      .all() as Array<{ meal_type: 'lunch' | 'dinner'; price_per_plate: number }>;
+    const lunchP = legacyPrices.find((p) => p.meal_type === 'lunch')?.price_per_plate ?? 0;
+    const dinnerP = legacyPrices.find((p) => p.meal_type === 'dinner')?.price_per_plate ?? 0;
+    if (lunchP > 0 || dinnerP > 0) {
+      const exists = db
+        .prepare('SELECT id FROM extras_catalog WHERE name = ?')
+        .get('Thali') as { id: string } | undefined;
+      if (!exists) {
+        db.prepare(
+          `INSERT INTO extras_catalog (id, name, unit_price, lunch_price, dinner_price, plate_weight, active, sort_order, shortcut_key)
+           VALUES (?, 'Thali', ?, ?, ?, 1, 1, 0, 'T')`
+        ).run(randomUUID(), Math.max(lunchP, dinnerP), lunchP, dinnerP);
+      }
+    }
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES ('thali_seeded', '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run();
+  }
+
+  // Migration: backfill bill_items with one Thali line per legacy bill so
+  // every bill is uniformly line-item-driven going forward. Only touches
+  // bills that have no bill_items rows yet AND have plates > 0.
+  const legacyBillsToBackfill = db
+    .prepare(
+      `SELECT b.id, b.plates, b.price_per_plate, b.total
+         FROM bills b
+        WHERE b.plates > 0
+          AND NOT EXISTS (SELECT 1 FROM bill_items bi WHERE bi.bill_id = b.id)`
+    )
+    .all() as Array<{ id: string; plates: number; price_per_plate: number; total: number }>;
+  if (legacyBillsToBackfill.length > 0) {
+    const ins = db.prepare(
+      `INSERT INTO bill_items (id, bill_id, catalog_id, name, qty, unit_price, plate_weight, total, sort_order)
+       VALUES (?, ?, NULL, 'Thali', ?, ?, 1, ?, 0)`
+    );
+    const tx = db.transaction(() => {
+      for (const b of legacyBillsToBackfill) {
+        ins.run(randomUUID(), b.id, b.plates, b.price_per_plate, b.plates * b.price_per_plate);
+      }
+    });
+    tx();
+  }
+
+  // Migration: one-time re-pend so every bill that has line items pushes
+  // its bill_items rows on the next sync. The bills upsert is idempotent
+  // (resolution=ignore-duplicates), so re-pending an already-cloud-synced
+  // bill is harmless — the bills row stays as it was, and the missing
+  // line items finally land. Guarded by a setting flag so this only fires
+  // once.
+  const extrasSyncInit = db
+    .prepare("SELECT value FROM settings WHERE key = 'bill_items_sync_initialized'")
+    .get() as { value: string } | undefined;
+  if (!extrasSyncInit) {
+    db.prepare(
+      `UPDATE bills SET sync_status = 'pending'
+        WHERE sync_status = 'synced'
+          AND id IN (SELECT DISTINCT bill_id FROM bill_items)`
+    ).run();
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES ('bill_items_sync_initialized', '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).run();
   }
 
   // Migration: add void columns if missing on an older bills table.
@@ -269,7 +403,10 @@ export type AuditAction =
   | 'integrity_check'
   | 'cash_count'
   | 'printer_test'
-  | 'extras_change';
+  | 'extras_change'
+  | 'bill_edit'
+  | 'cloud_restore'
+  | 'cloud_diff';
 
 export function writeAudit(entry: {
   actorUserId?: string | null;

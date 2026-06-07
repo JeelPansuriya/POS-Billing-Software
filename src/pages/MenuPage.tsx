@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 
-type Extra = {
+type MenuItem = {
   id: string;
   name: string;
-  unitPrice: number;
+  lunchPrice: number;
+  dinnerPrice: number;
+  plateWeight: number;
   active: number;
   sortOrder: number;
   shortcutKey: string | null;
@@ -12,7 +14,9 @@ type Extra = {
 type Draft = {
   id?: string;
   name: string;
-  unitPrice: string;
+  lunchPrice: string;
+  dinnerPrice: string;
+  plateWeight: string;
   active: boolean;
   sortOrder: number;
   shortcutKey: string;
@@ -20,14 +24,18 @@ type Draft = {
 
 const emptyDraft = (sortOrder: number): Draft => ({
   name: '',
-  unitPrice: '',
+  lunchPrice: '',
+  dinnerPrice: '',
+  // 1 is the most common case (full Thali / main item). Admin overrides for
+  // half / non-meal items.
+  plateWeight: '1',
   active: true,
   sortOrder,
   shortcutKey: '',
 });
 
 export default function MenuPage() {
-  const [items, setItems] = useState<Extra[]>([]);
+  const [items, setItems] = useState<MenuItem[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
@@ -43,16 +51,34 @@ export default function MenuPage() {
     load();
   }, []);
 
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshFromCloud = async () => {
+    setRefreshing(true);
+    try {
+      const r = await window.api.sync.menuNow();
+      if (r.ok) {
+        flash(`✓ Synced — ${r.items} items in catalog`);
+        await load();
+      } else {
+        flash(r.error ?? 'Sync failed', 'err');
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const startAdd = () => {
     const nextOrder = items.length === 0 ? 0 : Math.max(...items.map((i) => i.sortOrder)) + 10;
     setDraft(emptyDraft(nextOrder));
   };
 
-  const startEdit = (it: Extra) =>
+  const startEdit = (it: MenuItem) =>
     setDraft({
       id: it.id,
       name: it.name,
-      unitPrice: String(it.unitPrice),
+      lunchPrice: String(it.lunchPrice || ''),
+      dinnerPrice: String(it.dinnerPrice || ''),
+      plateWeight: String(it.plateWeight ?? 0),
       active: !!it.active,
       sortOrder: it.sortOrder,
       shortcutKey: it.shortcutKey ?? '',
@@ -60,15 +86,25 @@ export default function MenuPage() {
 
   const save = async () => {
     if (!draft) return;
-    const price = Number(draft.unitPrice);
     if (!draft.name.trim()) return flash('Name required', 'err');
-    if (!Number.isFinite(price) || price <= 0) return flash('Price must be > 0', 'err');
+    const lunchP = Number(draft.lunchPrice) || 0;
+    const dinnerP = Number(draft.dinnerPrice) || 0;
+    if (lunchP < 0 || dinnerP < 0) return flash('Prices must be ≥ 0', 'err');
+    if (lunchP <= 0 && dinnerP <= 0) {
+      return flash('Set at least one of lunch or dinner price', 'err');
+    }
+    const plateW = Number(draft.plateWeight);
+    if (!Number.isFinite(plateW) || plateW < 0) {
+      return flash('Plate count must be ≥ 0', 'err');
+    }
     setSaving(true);
     try {
       const r = await window.api.extras.upsert({
         id: draft.id,
         name: draft.name.trim(),
-        unitPrice: price,
+        lunchPrice: lunchP,
+        dinnerPrice: dinnerP,
+        plateWeight: plateW,
         active: draft.active,
         sortOrder: draft.sortOrder,
         shortcutKey: draft.shortcutKey.trim().toUpperCase() || null,
@@ -85,7 +121,7 @@ export default function MenuPage() {
     }
   };
 
-  const remove = async (it: Extra) => {
+  const remove = async (it: MenuItem) => {
     if (!confirm(`Delete "${it.name}"? Existing bills referencing it stay intact.`)) return;
     const r = await window.api.extras.delete(it.id);
     if (r.ok) {
@@ -96,11 +132,13 @@ export default function MenuPage() {
     }
   };
 
-  const toggleActive = async (it: Extra) => {
+  const toggleActive = async (it: MenuItem) => {
     const r = await window.api.extras.upsert({
       id: it.id,
       name: it.name,
-      unitPrice: it.unitPrice,
+      lunchPrice: it.lunchPrice,
+      dinnerPrice: it.dinnerPrice,
+      plateWeight: it.plateWeight,
       active: !it.active,
       sortOrder: it.sortOrder,
       shortcutKey: it.shortcutKey,
@@ -111,9 +149,9 @@ export default function MenuPage() {
 
   return (
     <div className="h-full overflow-auto p-6 bg-gray-50">
-      <div className="max-w-3xl mx-auto space-y-6">
+      <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-800">Menu — Extras</h1>
+          <h1 className="text-2xl font-bold text-gray-800">Menu</h1>
           <div className="flex items-center gap-3">
             {msg && (
               <span
@@ -122,6 +160,14 @@ export default function MenuPage() {
                 {msg}
               </span>
             )}
+            <button
+              onClick={refreshFromCloud}
+              disabled={refreshing}
+              className="px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-100 text-sm font-medium disabled:opacity-50"
+              title="Force-pull the menu from Supabase right now (otherwise auto-syncs every 5 min)"
+            >
+              {refreshing ? 'Syncing…' : '↻ Sync from cloud'}
+            </button>
             <button
               onClick={startAdd}
               className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold"
@@ -132,35 +178,47 @@ export default function MenuPage() {
         </div>
 
         <p className="text-sm text-gray-500">
-          Items here appear on the Billing page as quantity pickers alongside the Thali. Prices
-          are per unit. Inactive items stay in history but disappear from the bill UI.
+          Every sellable item lives here. Set per-item lunch and dinner prices — the Billing page
+          uses the active session's price. <strong>Plate count</strong> is how many "plates" the
+          item represents in daily totals: 1 = full Thali, 0.5 = half / child, 0 = non-meal item
+          like water or sweets.
         </p>
 
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs uppercase text-gray-500">
               <tr>
-                <th className="px-4 py-3 text-left">Name</th>
-                <th className="px-4 py-3 text-right">Price</th>
-                <th className="px-4 py-3 text-center">Shortcut</th>
-                <th className="px-4 py-3 text-center">Active</th>
-                <th className="px-4 py-3 text-right">Order</th>
-                <th className="px-4 py-3"></th>
+                <th className="px-3 py-3 text-left">Name</th>
+                <th className="px-3 py-3 text-right">Lunch ₹</th>
+                <th className="px-3 py-3 text-right">Dinner ₹</th>
+                <th className="px-3 py-3 text-right">Plates</th>
+                <th className="px-3 py-3 text-center">Key</th>
+                <th className="px-3 py-3 text-center">Active</th>
+                <th className="px-3 py-3 text-right">Order</th>
+                <th className="px-3 py-3"></th>
               </tr>
             </thead>
             <tbody>
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
+                  <td colSpan={8} className="px-4 py-8 text-center text-gray-400">
                     No items yet. Click <strong>+ Add item</strong> to start.
                   </td>
                 </tr>
               )}
               {items.map((it) => (
                 <tr key={it.id} className="border-t">
-                  <td className="px-4 py-2 font-medium">{it.name}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">₹{it.unitPrice}</td>
-                  <td className="px-4 py-2 text-center">
+                  <td className="px-3 py-2 font-medium">{it.name}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {it.lunchPrice > 0 ? `₹${it.lunchPrice}` : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {it.dinnerPrice > 0 ? `₹${it.dinnerPrice}` : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-600">
+                    {it.plateWeight}
+                  </td>
+                  <td className="px-3 py-2 text-center">
                     {it.shortcutKey ? (
                       <kbd className="px-2 py-0.5 rounded bg-gray-100 border border-gray-300 text-xs font-mono font-bold">
                         {it.shortcutKey}
@@ -169,7 +227,7 @@ export default function MenuPage() {
                       <span className="text-xs text-gray-400">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-center">
+                  <td className="px-3 py-2 text-center">
                     <button
                       onClick={() => toggleActive(it)}
                       className={`text-xs px-2 py-1 rounded ${
@@ -181,8 +239,10 @@ export default function MenuPage() {
                       {it.active ? 'Active' : 'Hidden'}
                     </button>
                   </td>
-                  <td className="px-4 py-2 text-right text-gray-600 tabular-nums">{it.sortOrder}</td>
-                  <td className="px-4 py-2 text-right">
+                  <td className="px-3 py-2 text-right text-gray-600 tabular-nums">
+                    {it.sortOrder}
+                  </td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
                     <button
                       onClick={() => startEdit(it)}
                       className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-100 mr-1"
@@ -204,26 +264,54 @@ export default function MenuPage() {
 
         {draft && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-            <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md space-y-4">
+            <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md space-y-4 max-h-[90vh] overflow-auto">
               <h2 className="text-lg font-semibold">{draft.id ? 'Edit item' : 'Add item'}</h2>
               <div>
                 <label className="block text-xs uppercase text-gray-500 mb-1">Name</label>
                 <input
                   value={draft.name}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                  placeholder="e.g. Raas, Sweet, Roti"
+                  placeholder="e.g. Thali, Child Thali, Parcel Thali, Raas, Water"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   autoFocus
                 />
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs uppercase text-gray-500 mb-1">Lunch ₹</label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={draft.lunchPrice}
+                    onChange={(e) => setDraft({ ...draft, lunchPrice: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs uppercase text-gray-500 mb-1">Dinner ₹</label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={draft.dinnerPrice}
+                    onChange={(e) => setDraft({ ...draft, dinnerPrice: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-gray-400 -mt-2">
+                Leave one blank if the item is only sold at the other session.
+              </p>
               <div>
-                <label className="block text-xs uppercase text-gray-500 mb-1">Unit price (₹)</label>
+                <label className="block text-xs uppercase text-gray-500 mb-1">
+                  Plate count (1 = full plate, 0.5 = half/child, 0 = non-meal)
+                </label>
                 <input
                   type="number"
-                  inputMode="numeric"
-                  value={draft.unitPrice}
-                  onChange={(e) => setDraft({ ...draft, unitPrice: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  step="0.1"
+                  inputMode="decimal"
+                  value={draft.plateWeight}
+                  onChange={(e) => setDraft({ ...draft, plateWeight: e.target.value })}
+                  className="w-32 px-3 py-2 border border-gray-300 rounded-lg"
                 />
               </div>
               <div>
@@ -238,11 +326,11 @@ export default function MenuPage() {
                     setDraft({ ...draft, shortcutKey: e.target.value.toUpperCase() })
                   }
                   className="w-20 px-3 py-2 border border-gray-300 rounded-lg text-center font-mono uppercase"
-                  placeholder="R"
+                  placeholder="T"
                 />
                 <p className="text-xs text-gray-400 mt-1">
-                  T, C, U are reserved (Thali, Cash, UPI). On the Billing page, press this letter
-                  then a number to set quantity. Leave blank to skip.
+                  C and U are reserved (Cash, UPI). On the Billing page, press this letter then a
+                  number to set quantity. Leave blank to skip.
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-3">

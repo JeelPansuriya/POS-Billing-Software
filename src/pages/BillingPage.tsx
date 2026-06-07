@@ -3,6 +3,7 @@ import { useApp } from '../store';
 import type { PaymentMode } from '../types';
 import DaySummaryModal from '../components/DaySummaryModal';
 import VoidBillModal from '../components/VoidBillModal';
+import EditBillModal from '../components/EditBillModal';
 
 // SQLite stores created_at as "YYYY-MM-DD HH:MM:SS" (UTC, no Z marker), which
 // JS's Date() parses as local — so a 14:30 IST bill prints/displays as 09:00.
@@ -12,21 +13,25 @@ function parseDbDate(s: string): string {
   return s.includes('T') ? s : s.replace(' ', 'T') + 'Z';
 }
 
-type Extra = {
+type MenuItem = {
   id: string;
   name: string;
-  unitPrice: number;
+  lunchPrice: number;
+  dinnerPrice: number;
+  plateWeight: number;
   active: number;
   sortOrder: number;
   shortcutKey: string | null;
 };
 
-// pending state for two-stage keyboard input. itemId is 'thali' for the
-// built-in Thali (which has fixed shortcut T) or an extra's id for catalog
-// items. qtyStr is the in-progress digit accumulator.
+// pending state for two-stage keyboard input. itemId is the catalog item id;
+// qtyStr is the in-progress digit accumulator.
 type Pending = { itemId: string; qtyStr: string } | null;
 
-const RESERVED_KEYS = new Set(['T', 'C', 'U']);
+// C and U are the only reserved letters now — Thali lives in the catalog
+// like any other item, so T can be the Thali item's shortcut without being
+// reserved at the keyboard level.
+const RESERVED_KEYS = new Set(['C', 'U']);
 
 export default function BillingPage() {
   const mealType = useApp((s) => s.mealType);
@@ -35,9 +40,7 @@ export default function BillingPage() {
   // log, and Supabase sync. Session-only — toggle resets on reload so a forgotten
   // toggle can't silently swallow real sales.
   const [testMode, setTestMode] = useState(false);
-  const [thaliQty, setThaliQty] = useState(0);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('cash');
-  const [prices, setPrices] = useState<{ lunch: number; dinner: number }>({ lunch: 0, dinner: 0 });
   const [busy, setBusy] = useState(false);
   const [lastBill, setLastBill] = useState<{
     id: string;
@@ -51,8 +54,9 @@ export default function BillingPage() {
   const [recent, setRecent] = useState<any[]>([]);
   const [tokenSearch, setTokenSearch] = useState('');
   const [searchHits, setSearchHits] = useState<any[] | null>(null);
-  const [extras, setExtras] = useState<Extra[]>([]);
-  const [extraQty, setExtraQty] = useState<Record<string, number>>({});
+  const [items, setItems] = useState<MenuItem[]>([]);
+  // Quantity per catalog item id. Items absent from the map count as 0.
+  const [itemQtyMap, setItemQtyMap] = useState<Record<string, number>>({});
   const [pending, setPending] = useState<Pending>(null);
   const [stats, setStats] = useState<{
     nextTokenNo: number;
@@ -69,22 +73,25 @@ export default function BillingPage() {
     plates: number;
     total: number;
   } | null>(null);
+  const [editTarget, setEditTarget] = useState<{
+    id: string;
+    token_no: number;
+    meal_type: 'lunch' | 'dinner';
+    payment_mode: 'cash' | 'upi';
+    total: number;
+    voided_at: string | null;
+    extras?: Array<{ name: string; qty: number; unitPrice: number; total: number }>;
+  } | null>(null);
 
-  const setExtraQtyById = (id: string, q: number) =>
-    setExtraQty((prev) => {
+  const setItemQty = (id: string, q: number) =>
+    setItemQtyMap((prev) => {
       const next = { ...prev };
       if (q <= 0) delete next[id];
-      else next[id] = q;
+      else next[id] = Math.max(0, q);
       return next;
     });
 
-  const setItemQty = (itemId: string, qty: number) => {
-    if (itemId === 'thali') setThaliQty(Math.max(0, qty));
-    else setExtraQtyById(itemId, Math.max(0, qty));
-  };
-
-  const refreshPrices = async () => setPrices(await window.api.prices.get());
-  const refreshExtras = async () => setExtras(await window.api.extras.list());
+  const refreshItems = async () => setItems(await window.api.extras.list());
   const refreshRecent = async () => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -104,18 +111,18 @@ export default function BillingPage() {
   };
 
   useEffect(() => {
-    refreshPrices();
+    refreshItems();
     refreshRecent();
     refreshStats();
-    refreshExtras();
   }, []);
 
-  const pricePerPlate = prices[mealType];
-  const thaliLineTotal = pricePerPlate * thaliQty;
+  // Pick the right price column for the active session. Items with no price
+  // for this meal are flagged so the UI can dim/disable them.
+  const priceFor = (it: MenuItem): number =>
+    mealType === 'lunch' ? it.lunchPrice : it.dinnerPrice;
 
-  // The bill view: ordered list of non-zero items (Thali first, then extras
-  // in catalog sort order). Used by the right-panel breakdown and as the
-  // single source of truth for total + submit gating.
+  // The bill view: ordered list of non-zero items in catalog sort order.
+  // Single source of truth for the right-panel breakdown, total, and submit gating.
   const billLines = useMemo(() => {
     const lines: Array<{
       itemId: string;
@@ -125,38 +132,28 @@ export default function BillingPage() {
       lineTotal: number;
       shortcutKey: string;
     }> = [];
-    if (thaliQty > 0) {
+    for (const it of items) {
+      const q = itemQtyMap[it.id] ?? 0;
+      if (q <= 0) continue;
+      const unit = priceFor(it);
+      if (unit <= 0) continue;
       lines.push({
-        itemId: 'thali',
-        name: 'THALI',
-        qty: thaliQty,
-        unitPrice: pricePerPlate,
-        lineTotal: thaliLineTotal,
-        shortcutKey: 'T',
+        itemId: it.id,
+        name: it.name.toUpperCase(),
+        qty: q,
+        unitPrice: unit,
+        lineTotal: q * unit,
+        shortcutKey: (it.shortcutKey ?? '').toUpperCase(),
       });
     }
-    for (const x of extras) {
-      const q = extraQty[x.id] ?? 0;
-      if (q > 0) {
-        lines.push({
-          itemId: x.id,
-          name: x.name.toUpperCase(),
-          qty: q,
-          unitPrice: x.unitPrice,
-          lineTotal: q * x.unitPrice,
-          shortcutKey: x.shortcutKey ?? '',
-        });
-      }
-    }
     return lines;
-  }, [thaliQty, pricePerPlate, thaliLineTotal, extras, extraQty]);
+  }, [items, itemQtyMap, mealType]);
 
   const total = billLines.reduce((s, l) => s + l.lineTotal, 0);
   const totalQty = billLines.reduce((s, l) => s + l.qty, 0);
 
   const clearBill = () => {
-    setThaliQty(0);
-    setExtraQty({});
+    setItemQtyMap({});
     setPending(null);
     setPaymentMode('cash');
   };
@@ -165,25 +162,21 @@ export default function BillingPage() {
     if (busy || total <= 0) return;
     setBusy(true);
     try {
-      const extrasPayload = Object.entries(extraQty)
-        .filter(([, q]) => q > 0)
-        .map(([extraId, qty]) => ({ extraId, qty }));
+      const itemsPayload = billLines.map((l) => ({ itemId: l.itemId, qty: l.qty }));
       if (testMode) {
         const r = await window.api.bills.testPrint({
-          plates: thaliQty,
           mealType,
           paymentMode,
-          extras: extrasPayload,
+          items: itemsPayload,
         });
         if (r.ok) clearBill();
         else alert(`Test print failed: ${r.error ?? 'unknown'}`);
         return;
       }
       const res = await window.api.bills.create({
-        plates: thaliQty,
         mealType,
         paymentMode,
-        extras: extrasPayload,
+        items: itemsPayload,
       });
       if (res.ok && res.bill) {
         setLastBill({
@@ -220,12 +213,14 @@ export default function BillingPage() {
     setTimeout(() => setLastBill(null), 4000);
   };
 
-  // Resolve a letter key to an item. Reserved letters (T/C/U) are handled
-  // separately by the caller. Returns null if no item matches the key.
+  // Resolve a letter key to a catalog item. Reserved letters (C/U) are handled
+  // separately by the caller. Returns null if no item matches the key OR the
+  // item has no price for the active meal.
   const itemByKey = (k: string): { itemId: string } | null => {
-    if (k === 'T') return { itemId: 'thali' };
-    const ex = extras.find((e) => (e.shortcutKey ?? '').toUpperCase() === k);
-    return ex ? { itemId: ex.id } : null;
+    const it = items.find((e) => (e.shortcutKey ?? '').toUpperCase() === k);
+    if (!it) return null;
+    if (priceFor(it) <= 0) return null;
+    return { itemId: it.id };
   };
 
   // Apply pending.qtyStr to its item. Empty string is a no-op (just clears
@@ -337,22 +332,18 @@ export default function BillingPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showSummary, voidTarget, pending, total, busy, extras, thaliQty, extraQty]);
+  }, [showSummary, voidTarget, pending, total, busy, items, itemQtyMap, mealType]);
 
   // Pretty-print the pending state for the banner.
   const pendingLabel = useMemo(() => {
     if (!pending) return null;
-    let name = 'THALI';
-    let key = 'T';
-    if (pending.itemId !== 'thali') {
-      const ex = extras.find((e) => e.id === pending.itemId);
-      if (ex) {
-        name = ex.name.toUpperCase();
-        key = (ex.shortcutKey ?? '').toUpperCase() || '?';
-      }
-    }
-    return { name, key };
-  }, [pending, extras]);
+    const it = items.find((e) => e.id === pending.itemId);
+    if (!it) return null;
+    return {
+      name: it.name.toUpperCase(),
+      key: (it.shortcutKey ?? '').toUpperCase() || '?',
+    };
+  }, [pending, items]);
 
   const itemCards: Array<{
     itemId: string;
@@ -360,22 +351,18 @@ export default function BillingPage() {
     unitPrice: number;
     shortcutKey: string;
     qty: number;
-  }> = [
-    {
-      itemId: 'thali',
-      name: 'Thali',
-      unitPrice: pricePerPlate,
-      shortcutKey: 'T',
-      qty: thaliQty,
-    },
-    ...extras.map((x) => ({
+    available: boolean;
+  }> = items.map((x) => {
+    const unit = priceFor(x);
+    return {
       itemId: x.id,
       name: x.name,
-      unitPrice: x.unitPrice,
+      unitPrice: unit,
       shortcutKey: (x.shortcutKey ?? '').toUpperCase(),
-      qty: extraQty[x.id] ?? 0,
-    })),
-  ];
+      qty: itemQtyMap[x.id] ?? 0,
+      available: unit > 0,
+    };
+  });
 
   return (
     <div className="h-full flex flex-col">
@@ -442,29 +429,41 @@ export default function BillingPage() {
           </div>
 
           <div className="grid grid-cols-3 gap-3">
+            {itemCards.length === 0 && (
+              <div className="col-span-3 p-8 text-center text-gray-400 text-sm border-2 border-dashed rounded-xl">
+                No menu items configured. Open the <strong>Menu</strong> tab to add some.
+              </div>
+            )}
             {itemCards.map((c) => {
               const isPending = pending?.itemId === c.itemId;
               const hasQty = c.qty > 0;
-              const shortcutAvail = !!c.shortcutKey && !RESERVED_KEYS.has(c.shortcutKey)
-                || c.shortcutKey === 'T';
+              const shortcutValid = !!c.shortcutKey && !RESERVED_KEYS.has(c.shortcutKey);
               return (
                 <button
                   key={c.itemId}
+                  disabled={!c.available}
                   onClick={() => {
-                    // Tap to start typing a qty for this item.
+                    if (!c.available) return;
                     if (pending) commitPending(pending);
                     setPending({ itemId: c.itemId, qtyStr: '' });
                   }}
                   className={`relative text-left rounded-xl border-2 p-3 transition-all shadow-sm ${
-                    isPending
+                    !c.available
+                      ? 'bg-gray-50 border-gray-200 opacity-50 cursor-not-allowed'
+                      : isPending
                       ? 'bg-brand-50 border-brand-500 ring-2 ring-brand-300'
                       : hasQty
                       ? 'bg-orange-50 border-orange-300'
                       : 'bg-white border-gray-200 hover:border-gray-400'
                   }`}
+                  title={
+                    !c.available
+                      ? `${c.name} has no ${mealType} price`
+                      : undefined
+                  }
                 >
                   <div className="absolute top-2 right-2">
-                    {shortcutAvail && c.shortcutKey ? (
+                    {shortcutValid ? (
                       <kbd
                         className={`px-2 py-0.5 rounded text-xs font-mono font-bold ${
                           isPending
@@ -479,14 +478,16 @@ export default function BillingPage() {
                     )}
                   </div>
                   <div className="font-semibold text-gray-800 truncate pr-10">{c.name}</div>
-                  <div className="text-xs text-gray-500 tabular-nums mt-0.5">₹{c.unitPrice}</div>
+                  <div className="text-xs text-gray-500 tabular-nums mt-0.5">
+                    {c.available ? `₹${c.unitPrice}` : `no ${mealType} price`}
+                  </div>
                   <div className="mt-2 flex items-center gap-1">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setItemQty(c.itemId, Math.max(0, c.qty - 1));
                       }}
-                      disabled={c.qty === 0}
+                      disabled={c.qty === 0 || !c.available}
                       className="w-7 h-7 rounded-full bg-gray-200 hover:bg-gray-300 disabled:opacity-40 text-sm font-bold"
                     >
                       −
@@ -497,7 +498,8 @@ export default function BillingPage() {
                         e.stopPropagation();
                         setItemQty(c.itemId, c.qty + 1);
                       }}
-                      className="w-7 h-7 rounded-full bg-brand-600 hover:bg-brand-700 text-white text-sm font-bold"
+                      disabled={!c.available}
+                      className="w-7 h-7 rounded-full bg-brand-600 hover:bg-brand-700 disabled:opacity-40 text-white text-sm font-bold"
                     >
                       +
                     </button>
@@ -584,6 +586,24 @@ export default function BillingPage() {
                           >
                             Reprint
                           </button>
+                          {user?.role === 'admin' && (
+                            <button
+                              onClick={() =>
+                                setEditTarget({
+                                  id: b.id,
+                                  token_no: b.token_no,
+                                  meal_type: b.meal_type,
+                                  payment_mode: b.payment_mode,
+                                  total: b.total,
+                                  voided_at: b.voided_at,
+                                  extras: b.extras,
+                                })
+                              }
+                              className="text-xs px-2 py-1 rounded border border-blue-300 text-blue-700 hover:bg-blue-50"
+                            >
+                              Edit
+                            </button>
+                          )}
                           <button
                             onClick={() =>
                               setVoidTarget({
@@ -648,7 +668,7 @@ export default function BillingPage() {
                 : 'bg-indigo-100 text-indigo-900'
             }`}
           >
-            {mealType === 'lunch' ? '☀ LUNCH' : '☾ DINNER'} — ₹{pricePerPlate}/plate
+            {mealType === 'lunch' ? '☀ LUNCH' : '☾ DINNER'} session
           </div>
 
           {/* Current bill breakdown */}
@@ -658,10 +678,17 @@ export default function BillingPage() {
             </div>
             {billLines.length === 0 ? (
               <div className="text-sm text-gray-400 py-4 text-center">
-                No items yet. Press <kbd className="px-1.5 py-0.5 rounded border bg-gray-50 font-mono">T</kbd> + qty
-                {extras.length > 0 && ', or any item-letter,'} then{' '}
-                <kbd className="px-1.5 py-0.5 rounded border bg-gray-50 font-mono">Ctrl+Enter</kbd>{' '}
-                to save.
+                {items.length === 0
+                  ? 'No menu items yet. Open the Menu tab to add some.'
+                  : (
+                      <>
+                        No items yet. Press an item's{' '}
+                        <kbd className="px-1.5 py-0.5 rounded border bg-gray-50 font-mono">letter</kbd>{' '}
+                        + qty, then{' '}
+                        <kbd className="px-1.5 py-0.5 rounded border bg-gray-50 font-mono">Ctrl+Enter</kbd>{' '}
+                        to save.
+                      </>
+                    )}
               </div>
             ) : (
               <div className="divide-y divide-gray-100">
@@ -728,7 +755,7 @@ export default function BillingPage() {
             </button>
             <button
               onClick={submit}
-              disabled={busy || total <= 0 || pricePerPlate <= 0}
+              disabled={busy || total <= 0}
               className="col-span-2 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 active:bg-brand-700 disabled:opacity-50 text-white text-base font-bold shadow-lg"
             >
               {busy ? 'Printing…' : `Save & Print · ₹${total}`}
@@ -772,6 +799,17 @@ export default function BillingPage() {
             bill={voidTarget}
             onClose={() => setVoidTarget(null)}
             onVoided={() => {
+              refreshRecent();
+              refreshStats();
+            }}
+          />
+        )}
+
+        {editTarget && (
+          <EditBillModal
+            bill={editTarget}
+            onClose={() => setEditTarget(null)}
+            onSaved={() => {
               refreshRecent();
               refreshStats();
             }}

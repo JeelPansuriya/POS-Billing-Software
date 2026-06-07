@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useApp } from '../store';
 
 // SQLite's datetime('now') stores UTC as "YYYY-MM-DD HH:MM:SS" with no Z, and
 // JS's Date() then treats that as local — wrong by the local TZ offset.
@@ -52,10 +53,65 @@ type RestoreResult =
   | { ok: true; preview: false; inserted: number; skipped: number };
 
 export default function ToolsPage() {
+  const user = useApp((s) => s.user);
+  const isAdmin = user?.role === 'admin';
   const [flash, setFlash] = useState<string>('');
   const showFlash = (m: string) => {
     setFlash(m);
     setTimeout(() => setFlash(''), 2500);
+  };
+
+  // Admin-only cloud diagnostics + restore.
+  type CloudDiff =
+    | {
+        ok: true;
+        localBills: number;
+        cloudBills: number;
+        onlyLocalBills: string[];
+        onlyCloudBills: string[];
+        mismatchedBills: Array<{ id: string; field: string; local: any; cloud: any }>;
+        localItems: number;
+        cloudItems: number;
+        onlyLocalItems: number;
+        onlyCloudItems: number;
+      }
+    | { ok: false; reason: string };
+  const [diff, setDiff] = useState<CloudDiff | null>(null);
+  const [diffRunning, setDiffRunning] = useState(false);
+  const runCloudDiff = async () => {
+    setDiffRunning(true);
+    try {
+      setDiff(await window.api.sync.cloudDiff());
+    } finally {
+      setDiffRunning(false);
+    }
+  };
+  const [cloudRestoring, setCloudRestoring] = useState(false);
+  const runCloudRestore = async (mode: 'safe' | 'force') => {
+    const confirmText =
+      mode === 'safe'
+        ? 'Sync any pending local bills up to Supabase first, then REPLACE local DB with the cloud snapshot. Continue?'
+        : 'FORCE OVERWRITE — any local-only bills will be DESTROYED. Type OVERWRITE to confirm:';
+    if (mode === 'safe') {
+      if (!confirm(confirmText)) return;
+    } else {
+      const ans = prompt(confirmText);
+      if (ans !== 'OVERWRITE') return;
+    }
+    setCloudRestoring(true);
+    try {
+      const r = await window.api.sync.cloudRestore(mode);
+      if (r.ok) {
+        showFlash(
+          `✓ Restored — ${r.insertedBills} bills, ${r.insertedItems} items (replaced ${r.deletedBills}/${r.deletedItems})`
+        );
+        setDiff(null);
+      } else {
+        alert(`Restore failed: ${r.reason}`);
+      }
+    } finally {
+      setCloudRestoring(false);
+    }
   };
 
   // Printer test
@@ -405,6 +461,104 @@ export default function ToolsPage() {
           )}
         </section>
 
+        {isAdmin && (
+          <section className="bg-white rounded-xl border border-amber-300 shadow-sm p-5">
+            <h2 className="font-semibold text-gray-800 mb-1">
+              Cloud sync diagnostics{' '}
+              <span className="text-xs uppercase tracking-wider text-amber-700 ml-2">
+                Admin only
+              </span>
+            </h2>
+            <p className="text-sm text-gray-500 mb-3">
+              Compare local DB against Supabase, or replace local with the cloud snapshot.
+              Restore is destructive — only run it if you understand what it does.
+            </p>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button
+                onClick={runCloudDiff}
+                disabled={diffRunning}
+                className="px-4 py-2 rounded-lg bg-gray-800 hover:bg-gray-900 text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {diffRunning ? 'Comparing…' : 'Check local vs cloud'}
+              </button>
+              <button
+                onClick={() => runCloudRestore('safe')}
+                disabled={cloudRestoring}
+                className="px-4 py-2 rounded-lg border border-blue-500 text-blue-700 hover:bg-blue-50 text-sm font-semibold disabled:opacity-50"
+                title="Push pending local bills first, then pull cloud and replace"
+              >
+                {cloudRestoring ? 'Working…' : 'Sync up + restore from cloud'}
+              </button>
+              <button
+                onClick={() => runCloudRestore('force')}
+                disabled={cloudRestoring}
+                className="px-4 py-2 rounded-lg border border-red-500 text-red-700 hover:bg-red-50 text-sm font-semibold disabled:opacity-50"
+                title="Force overwrite — local-only bills will be lost"
+              >
+                {cloudRestoring ? 'Working…' : '⚠ Force overwrite from cloud'}
+              </button>
+            </div>
+            {diff && diff.ok && (
+              <div className="bg-gray-50 rounded-lg border border-gray-200 p-3 text-sm space-y-1">
+                <div className="flex gap-4 flex-wrap">
+                  <span>
+                    <strong>Bills</strong>: local {diff.localBills} / cloud {diff.cloudBills}
+                  </span>
+                  <span>
+                    <strong>Items</strong>: local {diff.localItems} / cloud {diff.cloudItems}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-700 space-y-0.5">
+                  {diff.onlyLocalBills.length > 0 && (
+                    <div>
+                      🟠 {diff.onlyLocalBills.length} bill
+                      {diff.onlyLocalBills.length === 1 ? '' : 's'} only in local (will be
+                      pushed on next sync)
+                    </div>
+                  )}
+                  {diff.onlyCloudBills.length > 0 && (
+                    <div>
+                      🟣 {diff.onlyCloudBills.length} bill
+                      {diff.onlyCloudBills.length === 1 ? '' : 's'} only in cloud
+                    </div>
+                  )}
+                  {diff.mismatchedBills.length > 0 && (
+                    <div>
+                      ⚠ {diff.mismatchedBills.length} bill
+                      {diff.mismatchedBills.length === 1 ? '' : 's'} differ between local and
+                      cloud (e.g.{' '}
+                      <span className="font-mono">
+                        #{diff.mismatchedBills[0].id.slice(0, 8)} → {diff.mismatchedBills[0].field}:
+                        local={String(diff.mismatchedBills[0].local)} cloud=
+                        {String(diff.mismatchedBills[0].cloud)}
+                      </span>
+                      )
+                    </div>
+                  )}
+                  {diff.onlyLocalItems > 0 && (
+                    <div>🟠 {diff.onlyLocalItems} line items only in local</div>
+                  )}
+                  {diff.onlyCloudItems > 0 && (
+                    <div>🟣 {diff.onlyCloudItems} line items only in cloud</div>
+                  )}
+                  {diff.onlyLocalBills.length === 0 &&
+                    diff.onlyCloudBills.length === 0 &&
+                    diff.mismatchedBills.length === 0 &&
+                    diff.onlyLocalItems === 0 &&
+                    diff.onlyCloudItems === 0 && (
+                      <div className="text-green-700">✓ Local and cloud match.</div>
+                    )}
+                </div>
+              </div>
+            )}
+            {diff && !diff.ok && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                {diff.reason}
+              </div>
+            )}
+          </section>
+        )}
+
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
           <h2 className="font-semibold text-gray-800 mb-3">Database integrity</h2>
           <p className="text-sm text-gray-500 mb-3">
@@ -679,15 +833,6 @@ function ToolsMealSection({
         <span className="tabular-nums">₹{m.revenue.toLocaleString()}</span>
       </div>
       <div className="ml-4 space-y-0.5">
-        {m.plates > 0 && (
-          <div className="flex items-baseline gap-2">
-            <span className="text-gray-700 flex-1">Thali</span>
-            <span className="text-gray-500 tabular-nums">{m.plates}</span>
-            <span className="font-semibold tabular-nums w-20 text-right">
-              ₹{m.plateRevenue.toLocaleString()}
-            </span>
-          </div>
-        )}
         {m.extras.map((x) => (
           <div key={x.name} className="flex items-baseline gap-2">
             <span className="text-gray-700 flex-1">{x.name}</span>

@@ -217,15 +217,6 @@ function MealSection({
         <span className="tabular-nums">₹{m.revenue.toLocaleString()}</span>
       </div>
       <div className="mt-2 px-2">
-        {m.plates > 0 && (
-          <div className="flex items-baseline gap-2 py-1 text-sm">
-            <span className="font-medium flex-1">Thali</span>
-            <span className="text-gray-500 tabular-nums">{m.plates}</span>
-            <span className="font-semibold tabular-nums w-20 text-right">
-              ₹{m.plateRevenue.toLocaleString()}
-            </span>
-          </div>
-        )}
         {m.extras.map((x) => (
           <div key={x.name} className="flex items-baseline gap-2 py-1 text-sm">
             <span className="font-medium flex-1">{x.name}</span>

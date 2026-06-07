@@ -118,6 +118,68 @@ export async function syncPendingBills(): Promise<{
       };
     }
 
+    // Push the line items for every bill we just synced. We do this AFTER
+    // the bills upsert because bill_items has a FK to bills(id) — items
+    // can only land if the parent row is already there. ignore-duplicates
+    // means re-running on already-pushed items is a no-op, so retries +
+    // re-pended bills are idempotent.
+    const billIds = pending.map((b) => b.id);
+    const itemsPlaceholders = billIds.map(() => '?').join(',');
+    const items = getDb()
+      .prepare(
+        `SELECT id, bill_id, catalog_id, name, qty, unit_price, plate_weight, total, sort_order
+           FROM bill_items
+          WHERE bill_id IN (${itemsPlaceholders})`
+      )
+      .all(...billIds) as Array<{
+      id: string;
+      bill_id: string;
+      catalog_id: string | null;
+      name: string;
+      qty: number;
+      unit_price: number;
+      plate_weight: number;
+      total: number;
+      sort_order: number;
+    }>;
+
+    if (items.length > 0) {
+      const itemsRes = await fetch(`${baseUrl}/rest/v1/bill_items`, {
+        method: 'POST',
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=ignore-duplicates,return=minimal',
+        },
+        body: JSON.stringify(items),
+      });
+      if (!itemsRes.ok) {
+        const t = await itemsRes.text().catch(() => '');
+        // 404 / "relation does not exist" = the user hasn't created the
+        // bill_items table on Supabase yet. Don't mark bills as failed,
+        // since the parent rows landed correctly — just log and continue.
+        // Once the table exists, the next sync push will catch up via
+        // the re-pend mechanism in db.ts.
+        const tableMissing =
+          itemsRes.status === 404 || /relation .* does not exist/i.test(t);
+        if (!tableMissing) {
+          console.error('Supabase bill_items upsert error:', itemsRes.status, t);
+          const stmt = getDb().prepare("UPDATE bills SET sync_status = 'failed' WHERE id = ?");
+          for (const b of pending) stmt.run(b.id);
+          return {
+            ok: false,
+            synced: 0,
+            failed: pending.length,
+            reason: `bill_items: ${itemsRes.status} ${t.slice(0, 200)}`,
+          };
+        }
+        console.warn(
+          'bill_items table missing on Supabase — bills synced but line items skipped'
+        );
+      }
+    }
+
     // For bills that have been voided locally and were already in the cloud,
     // the ignore-duplicates upsert above is a no-op. Call the void_bill RPC
     // (SECURITY DEFINER, granted to anon) to mark them voided in the cloud.
@@ -215,4 +277,239 @@ export async function maybeRunScheduledSync(): Promise<void> {
 
 export function resetClient() {
   // No-op now (kept for API compatibility — old code may import it).
+}
+
+// ----------------------------------------------------------------------
+// Admin-only cloud operations (compare + restore). These read the entire
+// cloud bills + bill_items tables, so they're paginated under the hood
+// and bounded for very large histories. Each helper resolves the same
+// Supabase config block as syncPendingBills.
+// ----------------------------------------------------------------------
+
+function resolveCloud(): { baseUrl: string; key: string } | null {
+  const builtInUrl = isPlaceholder(BUILT_IN_SUPABASE_URL) ? null : BUILT_IN_SUPABASE_URL;
+  const builtInKey = isPlaceholder(BUILT_IN_SUPABASE_ANON_KEY)
+    ? null
+    : BUILT_IN_SUPABASE_ANON_KEY;
+  const rawUrl = process.env.SUPABASE_URL || getSetting('supabase_url') || builtInUrl;
+  const key = process.env.SUPABASE_ANON_KEY || getSetting('supabase_anon_key') || builtInKey;
+  if (!rawUrl || !key) return null;
+  const baseUrl = rawUrl.trim().replace(/\/+$/, '').replace(/\/rest\/v1$/i, '');
+  return { baseUrl, key };
+}
+
+async function fetchAll(
+  baseUrl: string,
+  apiKey: string,
+  table: string,
+  select: string
+): Promise<any[]> {
+  // PostgREST caps at 1000 per request by default. Walk through pages.
+  const out: any[] = [];
+  const pageSize = 1000;
+  let from = 0;
+  while (true) {
+    const res = await fetch(
+      `${baseUrl}/rest/v1/${table}?select=${encodeURIComponent(select)}&order=id.asc`,
+      {
+        headers: {
+          apikey: apiKey,
+          Authorization: `Bearer ${apiKey}`,
+          Range: `${from}-${from + pageSize - 1}`,
+          'Range-Unit': 'items',
+          Prefer: 'count=exact',
+        },
+      }
+    );
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`${table} fetch failed: ${res.status} ${t.slice(0, 200)}`);
+    }
+    const page = (await res.json()) as any[];
+    out.push(...page);
+    if (page.length < pageSize) break;
+    from += pageSize;
+  }
+  return out;
+}
+
+export type CloudDiffSummary = {
+  ok: true;
+  localBills: number;
+  cloudBills: number;
+  onlyLocalBills: string[];
+  onlyCloudBills: string[];
+  mismatchedBills: Array<{ id: string; field: string; local: any; cloud: any }>;
+  localItems: number;
+  cloudItems: number;
+  onlyLocalItems: number;
+  onlyCloudItems: number;
+};
+
+export async function computeCloudDiff(): Promise<
+  CloudDiffSummary | { ok: false; reason: string }
+> {
+  const cfg = resolveCloud();
+  if (!cfg) return { ok: false, reason: 'supabase-not-configured' };
+  try {
+    const [cloudBills, cloudItems] = await Promise.all([
+      fetchAll(
+        cfg.baseUrl,
+        cfg.key,
+        'bills',
+        'id,token_no,plates,meal_type,total,payment_mode,created_at,voided_at,void_reason'
+      ),
+      fetchAll(cfg.baseUrl, cfg.key, 'bill_items', 'id,bill_id'),
+    ]);
+    const localBills = getDb()
+      .prepare(
+        'SELECT id, token_no, plates, meal_type, total, payment_mode, created_at, voided_at, void_reason FROM bills'
+      )
+      .all() as any[];
+    const localItems = getDb()
+      .prepare('SELECT id, bill_id FROM bill_items')
+      .all() as Array<{ id: string; bill_id: string }>;
+
+    const localBillIds = new Set(localBills.map((b: any) => b.id));
+    const cloudBillIds = new Set(cloudBills.map((b: any) => b.id));
+    const onlyLocalBills = localBills
+      .map((b: any) => b.id)
+      .filter((id: string) => !cloudBillIds.has(id));
+    const onlyCloudBills = cloudBills
+      .map((b: any) => b.id)
+      .filter((id: string) => !localBillIds.has(id));
+
+    // For bills present in both, compare a few load-bearing fields.
+    const cloudById = new Map<string, any>(cloudBills.map((b: any) => [b.id, b]));
+    const mismatchedBills: CloudDiffSummary['mismatchedBills'] = [];
+    for (const lb of localBills) {
+      const cb = cloudById.get(lb.id);
+      if (!cb) continue;
+      const fields = ['token_no', 'plates', 'meal_type', 'total', 'payment_mode', 'voided_at'];
+      for (const f of fields) {
+        // Loose compare so null vs undefined doesn't trip us.
+        if ((lb[f] ?? null) !== (cb[f] ?? null)) {
+          mismatchedBills.push({ id: lb.id, field: f, local: lb[f], cloud: cb[f] });
+          break; // one mismatch per bill is enough to flag
+        }
+      }
+    }
+
+    const localItemIds = new Set(localItems.map((i) => i.id));
+    const cloudItemIds = new Set(cloudItems.map((i: any) => i.id));
+    let onlyLocalItems = 0;
+    let onlyCloudItems = 0;
+    for (const id of localItemIds) if (!cloudItemIds.has(id)) onlyLocalItems++;
+    for (const id of cloudItemIds) if (!localItemIds.has(id)) onlyCloudItems++;
+
+    return {
+      ok: true,
+      localBills: localBills.length,
+      cloudBills: cloudBills.length,
+      onlyLocalBills,
+      onlyCloudBills,
+      mismatchedBills,
+      localItems: localItems.length,
+      cloudItems: cloudItems.length,
+      onlyLocalItems,
+      onlyCloudItems,
+    };
+  } catch (err: any) {
+    return { ok: false, reason: err?.message ?? String(err) };
+  }
+}
+
+export type CloudRestoreResult =
+  | { ok: true; insertedBills: number; insertedItems: number; deletedBills: number; deletedItems: number }
+  | { ok: false; reason: string };
+
+/**
+ * Replace local bills + bill_items with the cloud snapshot. Caller controls
+ * whether to push pending local bills first (safe mode) or skip that step
+ * (force mode — local-only bills are destroyed). Wrapped in a single
+ * transaction so a partial run can't leave the DB in a torn state.
+ */
+export async function restoreFromCloud(
+  options: { pushPendingFirst: boolean }
+): Promise<CloudRestoreResult> {
+  const cfg = resolveCloud();
+  if (!cfg) return { ok: false, reason: 'supabase-not-configured' };
+  if (options.pushPendingFirst) {
+    const pushRes = await syncPendingBills();
+    if (!pushRes.ok) {
+      return { ok: false, reason: `push-first failed: ${pushRes.reason ?? 'unknown'}` };
+    }
+  }
+  try {
+    const [cloudBills, cloudItems] = await Promise.all([
+      fetchAll(
+        cfg.baseUrl,
+        cfg.key,
+        'bills',
+        'id,token_no,plates,meal_type,price_per_plate,total,payment_mode,created_at,voided_at,void_reason'
+      ),
+      fetchAll(
+        cfg.baseUrl,
+        cfg.key,
+        'bill_items',
+        'id,bill_id,catalog_id,name,qty,unit_price,plate_weight,total,sort_order'
+      ),
+    ]);
+    let insertedBills = 0;
+    let insertedItems = 0;
+    let deletedBills = 0;
+    let deletedItems = 0;
+
+    const tx = getDb().transaction(() => {
+      // bill_items has FK ON DELETE CASCADE so deleting bills cleans children.
+      const beforeBills = (getDb().prepare('SELECT COUNT(*) as c FROM bills').get() as { c: number }).c;
+      const beforeItems = (getDb().prepare('SELECT COUNT(*) as c FROM bill_items').get() as { c: number }).c;
+      getDb().prepare('DELETE FROM bills').run();
+      deletedBills = beforeBills;
+      deletedItems = beforeItems;
+
+      const insBill = getDb().prepare(
+        `INSERT INTO bills (id, token_no, plates, meal_type, price_per_plate, total, payment_mode, created_at, voided_at, void_reason, sync_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced')`
+      );
+      for (const b of cloudBills) {
+        insBill.run(
+          b.id,
+          b.token_no,
+          b.plates ?? 0,
+          b.meal_type,
+          b.price_per_plate ?? 0,
+          b.total,
+          b.payment_mode,
+          b.created_at,
+          b.voided_at,
+          b.void_reason
+        );
+        insertedBills++;
+      }
+      const insItem = getDb().prepare(
+        `INSERT INTO bill_items (id, bill_id, catalog_id, name, qty, unit_price, plate_weight, total, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const it of cloudItems) {
+        insItem.run(
+          it.id,
+          it.bill_id,
+          it.catalog_id,
+          it.name,
+          it.qty,
+          it.unit_price,
+          it.plate_weight ?? 0,
+          it.total,
+          it.sort_order ?? 0
+        );
+        insertedItems++;
+      }
+    });
+    tx();
+
+    return { ok: true, insertedBills, insertedItems, deletedBills, deletedItems };
+  } catch (err: any) {
+    return { ok: false, reason: err?.message ?? String(err) };
+  }
 }
