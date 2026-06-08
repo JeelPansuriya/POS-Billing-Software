@@ -349,7 +349,23 @@ export default function BillingPage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showSummary, voidTarget, editTarget, pending, total, busy, items, itemQtyMap, mealType]);
+  }, [
+    showSummary,
+    voidTarget,
+    editTarget,
+    pending,
+    total,
+    busy,
+    items,
+    itemQtyMap,
+    mealType,
+    // paymentMode and testMode must be here too — submit() reads both. Without
+    // them in the deps the listener keeps a stale closure: pressing U flips
+    // the visible UPI highlight, but Ctrl+Enter calls the prior submit() that
+    // captured paymentMode='cash' and the bill saves as cash.
+    paymentMode,
+    testMode,
+  ]);
 
   // Pretty-print the pending state for the banner.
   const pendingLabel = useMemo(() => {

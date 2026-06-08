@@ -255,6 +255,43 @@ export function initDb() {
     tx();
   }
 
+  // Migration: normalize any ISO-format created_at/voided_at on bills back
+  // to the canonical SQLite space format ("YYYY-MM-DD HH:MM:SS"). A previous
+  // cloud-restore stored Supabase's PostgREST output verbatim (with a 'T'
+  // separator and timezone suffix), which broke lexicographic range filters
+  // in analytics. Only touches rows still in the bad format.
+  const normalizeIso = (s: string): string => {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return s;
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mi = String(d.getUTCMinutes()).padStart(2, '0');
+    const ss = String(d.getUTCSeconds()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+  };
+  const isoBills = db
+    .prepare("SELECT id, created_at, voided_at FROM bills WHERE created_at LIKE '%T%' OR (voided_at IS NOT NULL AND voided_at LIKE '%T%')")
+    .all() as Array<{ id: string; created_at: string; voided_at: string | null }>;
+  if (isoBills.length > 0) {
+    const upd = db.prepare(
+      'UPDATE bills SET created_at = ?, voided_at = ? WHERE id = ?'
+    );
+    const tx = db.transaction(() => {
+      for (const r of isoBills) {
+        upd.run(
+          r.created_at.includes('T') ? normalizeIso(r.created_at) : r.created_at,
+          r.voided_at && r.voided_at.includes('T')
+            ? normalizeIso(r.voided_at)
+            : r.voided_at,
+          r.id
+        );
+      }
+    });
+    tx();
+  }
+
   // Migration: one-time re-pend so every bill that has line items pushes
   // its bill_items rows on the next sync. The bills upsert is idempotent
   // (resolution=ignore-duplicates), so re-pending an already-cloud-synced

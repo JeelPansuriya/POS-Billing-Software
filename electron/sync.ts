@@ -419,6 +419,25 @@ export async function computeCloudDiff(): Promise<
   }
 }
 
+// Normalize whatever shape Supabase returns for created_at / voided_at into
+// the SQLite space-format UTC string we use everywhere locally. The lexicographic
+// WHERE created_at >= ? compares in analytics (and elsewhere) only line up
+// when stored values share the canonical "YYYY-MM-DD HH:MM:SS" shape.
+function normalizeStoredDate(s: string | null): string | null {
+  if (!s) return s;
+  // Already in canonical space format if it has a space and no 'T'.
+  if (!s.includes('T')) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s; // fallback — leave alone
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mi = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+}
+
 export type CloudRestoreResult =
   | { ok: true; insertedBills: number; insertedItems: number; deletedBills: number; deletedItems: number }
   | { ok: false; reason: string };
@@ -481,8 +500,8 @@ export async function restoreFromCloud(
           b.price_per_plate ?? 0,
           b.total,
           b.payment_mode,
-          b.created_at,
-          b.voided_at,
+          normalizeStoredDate(b.created_at),
+          normalizeStoredDate(b.voided_at),
           b.void_reason
         );
         insertedBills++;

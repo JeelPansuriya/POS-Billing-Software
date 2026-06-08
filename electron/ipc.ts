@@ -719,7 +719,72 @@ export function registerIpcHandlers(ipcMain: IpcMain) {
       )
       .all(range.from, range.to);
 
-    return { total, byMeal, byPayment, daily };
+    // Voided bills in the range — not part of "revenue" but worth surfacing
+    // so the owner can see how much was cancelled and follow up.
+    const voided = getDb()
+      .prepare(
+        `SELECT COUNT(*) as bills, COALESCE(SUM(total), 0) as revenue
+           FROM bills
+          WHERE created_at >= ? AND created_at < ?
+            AND voided_at IS NOT NULL`
+      )
+      .get(range.from, range.to) as { bills: number; revenue: number };
+
+    return { total, byMeal, byPayment, daily, voided };
+  });
+
+  // ---- TOP ITEMS ANALYTICS ----
+  // Aggregated qty + revenue per item over the range, sorted by revenue.
+  // The bill_items snapshot of name/price/plate_weight makes this stable
+  // even after admin renames or reprices catalog entries.
+  ipcMain.handle('analytics:items', (_e, range: { from: string; to: string }) => {
+    return getDb()
+      .prepare(
+        `SELECT bi.name,
+                COALESCE(SUM(bi.qty), 0) as qty,
+                COALESCE(SUM(bi.total), 0) as revenue,
+                COALESCE(SUM(bi.qty * bi.plate_weight), 0) as plates
+           FROM bill_items bi
+           JOIN bills b ON b.id = bi.bill_id
+          WHERE b.created_at >= ? AND b.created_at < ?
+            AND b.voided_at IS NULL
+          GROUP BY bi.name
+          ORDER BY revenue DESC, qty DESC`
+      )
+      .all(range.from, range.to) as Array<{
+      name: string;
+      qty: number;
+      revenue: number;
+      plates: number;
+    }>;
+  });
+
+  // ---- WEEKDAY PATTERN ----
+  // strftime('%w', ...) returns 0=Sunday, 1=Monday, ..., 6=Saturday — same
+  // convention as JS getDay(). The chart pads any missing weekdays so the
+  // bar order is always Mon-Sun for India.
+  ipcMain.handle('analytics:weekday', (_e, range: { from: string; to: string }) => {
+    const rows = getDb()
+      .prepare(
+        `SELECT CAST(strftime('%w', created_at, 'localtime') AS INTEGER) as weekday,
+                COUNT(*) as bills,
+                COALESCE(SUM(plates), 0) as plates,
+                COALESCE(SUM(total), 0) as revenue
+           FROM bills
+          WHERE created_at >= ? AND created_at < ?
+            AND voided_at IS NULL
+          GROUP BY weekday`
+      )
+      .all(range.from, range.to) as Array<{
+      weekday: number;
+      bills: number;
+      plates: number;
+      revenue: number;
+    }>;
+    const byDay = new Map(rows.map((r) => [r.weekday, r]));
+    return [0, 1, 2, 3, 4, 5, 6].map((w) =>
+      byDay.get(w) ?? { weekday: w, bills: 0, plates: 0, revenue: 0 }
+    );
   });
 
   // ---- HOUR-OF-DAY ANALYTICS ----

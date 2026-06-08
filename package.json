@@ -1,6 +1,6 @@
 {
   "name": "pos-billing-app",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Restaurant POS billing app — offline-first, role-based, with Supabase backup and 80mm thermal token printing",
   "productName": "Girr Kathiyawadi POS",
   "main": "dist-electron/main.js",

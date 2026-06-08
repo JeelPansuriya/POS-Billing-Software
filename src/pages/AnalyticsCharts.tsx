@@ -20,6 +20,7 @@ const PAY_COLORS = ['#22c55e', '#3b82f6'];
 type Slice = { name: string; value: number };
 type HourPoint = { hour: string; plates: number; revenue: number; bills: number };
 type PeakHour = { hour: number; plates: number } | null;
+type WeekdayPoint = { day: string; revenue: number; bills: number; plates: number };
 
 export default function AnalyticsCharts({
   mealPie,
@@ -27,12 +28,14 @@ export default function AnalyticsCharts({
   hourlyChart,
   daily,
   peakHour,
+  weekdayChart,
 }: {
   mealPie: Slice[];
   paymentPie: Slice[];
   hourlyChart: HourPoint[];
   daily: any[];
   peakHour: PeakHour;
+  weekdayChart: WeekdayPoint[];
 }) {
   return (
     <>
@@ -133,6 +136,30 @@ export default function AnalyticsCharts({
           </ResponsiveContainer>
         )}
       </Card>
+
+      <div className="mt-4">
+        <Card title="Weekday pattern">
+          {weekdayChart.every((d) => d.revenue === 0) ? (
+            <Empty />
+          ) : (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={weekdayChart}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="day" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} />
+                <Tooltip
+                  formatter={(v: any, k: any) =>
+                    k === 'Revenue (₹)' ? `₹${v}` : v
+                  }
+                />
+                <Legend />
+                <Bar dataKey="revenue" fill="#8b5cf6" name="Revenue (₹)" />
+                <Bar dataKey="plates" fill="#10b981" name="Plates" />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+      </div>
     </>
   );
 }

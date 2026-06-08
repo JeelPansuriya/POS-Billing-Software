@@ -98,10 +98,33 @@ const api = {
   },
   analytics: {
     summary: (range: { from: string; to: string }) =>
-      ipcRenderer.invoke('analytics:summary', range),
+      ipcRenderer.invoke('analytics:summary', range) as Promise<{
+        total: { bills: number; plates: number; revenue: number };
+        byMeal: Array<{
+          meal_type: 'lunch' | 'dinner';
+          bills: number;
+          plates: number;
+          revenue: number;
+        }>;
+        byPayment: Array<{
+          payment_mode: 'cash' | 'upi';
+          bills: number;
+          revenue: number;
+        }>;
+        daily: Array<{ day: string; plates: number; revenue: number }>;
+        voided: { bills: number; revenue: number };
+      }>,
     hourly: (range: { from: string; to: string }) =>
       ipcRenderer.invoke('analytics:hourly', range) as Promise<
         Array<{ hour: number; bills: number; plates: number; revenue: number }>
+      >,
+    items: (range: { from: string; to: string }) =>
+      ipcRenderer.invoke('analytics:items', range) as Promise<
+        Array<{ name: string; qty: number; revenue: number; plates: number }>
+      >,
+    weekday: (range: { from: string; to: string }) =>
+      ipcRenderer.invoke('analytics:weekday', range) as Promise<
+        Array<{ weekday: number; bills: number; plates: number; revenue: number }>
       >,
   },
   stats: {
